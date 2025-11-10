@@ -103,24 +103,19 @@ class VARSTok(nn.Module):
     def encode_infer(self, audio_input: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         features, discrete_codes, _, cluster_lengths = self.feature_extractor.infer(audio_input, **kwargs)
         
-        # 获得隐式编码cluster lengths的codes
         B, L = cluster_lengths.shape
-    
-        # 创建一个新的 tensor，用于存储最终的 shifted codes
-        shifted_codes = torch.full_like(discrete_codes, -1)  # 初始化为 -1
 
-        # 使用广播机制来计算偏移
+        shifted_codes = torch.full_like(discrete_codes, -1) 
+
         for b in range(B):
             for l in range(L):
                 shift = cluster_lengths[b, l]
                 if shift > 0:
-                    # 根据 cluster_lengths 来计算偏移
                     shifted_codes[0, b, l] = discrete_codes[0, b, l] + (shift - 1) * 4096
                 elif shift == 0:
-                    # cluster_lengths 为 0 时，直接设置为 -1（已经是初始化值）
                     shifted_codes[0, b, l] = -1
                 else:
-                    raise ValueError("cluster_lengths 中不应包含负数")
+                    raise ValueError("cluster_lengths should not contain negative values")
                 
         return features, shifted_codes, cluster_lengths
 

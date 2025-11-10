@@ -128,7 +128,7 @@ class VocosExp(pl.LightningModule):
         ]
 
         gen_params = [
-            {"params": self.feature_extractor.encodec.quantizer.parameters(), "lr": self.hparams.initial_learning_rate},  # VQ部分
+            {"params": self.feature_extractor.encodec.quantizer.parameters(), "lr": self.hparams.initial_learning_rate},  # VQ
             {"params": self.feature_extractor.encodec.encoder.parameters(), "lr": self.hparams.initial_learning_rate},  # encoder
             {"params": self.feature_extractor.encodec.decoder.parameters(), "lr": self.hparams.initial_learning_rate},  # encodec decoder (?)
             # {"params": self.feature_extractor.simvq_quantizer.parameters(), "lr": 2*self.hparams.initial_learning_rate},  # encodec decoder (?)
@@ -155,60 +155,6 @@ class VocosExp(pl.LightningModule):
                 {"scheduler": scheduler_gen, "interval": "step"},
             ],
         )
-    # def configure_optimizers(self):
-    #     disc_params = [
-    #         {"params": self.multiperioddisc.parameters(), "lr": self.hparams.initial_learning_rate},
-    #         {"params": self.multiresddisc.parameters(), "lr": self.hparams.initial_learning_rate},
-    #         {"params": self.dac.parameters(), "lr": self.hparams.initial_learning_rate},
-    #     ]
-
-    #     gen_params = [
-    #         {"params": self.feature_extractor.encodec.quantizer.parameters(), "lr": 2 * self.hparams.initial_learning_rate},  # VQ部分
-    #         {"params": self.feature_extractor.encodec.encoder.parameters(), "lr": self.hparams.initial_learning_rate},  # encoder
-    #         {"params": self.feature_extractor.encodec.decoder.parameters(), "lr": self.hparams.initial_learning_rate},  # encodec decoder
-    #         {"params": self.duration_predictor.parameters(), "lr": 2 * self.hparams.initial_learning_rate},  # Duration predictor
-    #         {"params": self.backbone.parameters(), "lr": self.hparams.initial_learning_rate},  # Decoder (backbone)
-    #         {"params": self.head.parameters(), "lr": self.hparams.initial_learning_rate},  # Decoder (head)
-    #     ]
-
-    #     opt_disc = torch.optim.AdamW(disc_params)
-    #     opt_gen = torch.optim.AdamW(gen_params)
-
-    #     # 定义按epoch衰减学习率的lambda函数
-    #     def lr_lambda(epoch):
-    #         if epoch < 40:
-    #             initial_lr = 1e-4
-    #             stage_epochs = 40
-    #         elif epoch < 60:
-    #             initial_lr = 5e-5
-    #             stage_epochs = 20
-    #         elif epoch < 80:
-    #             initial_lr = 2e-5
-    #             stage_epochs = 20
-    #         elif epoch < 100:
-    #             initial_lr = 1e-5
-    #             stage_epochs = 20
-    #         else:
-    #             initial_lr = 5e-6
-    #             stage_epochs = 0  # 超过200的epoch保持1e-5
-
-    #         if stage_epochs > 0:
-    #             progress = (epoch - (0 if epoch < 40 else (40 if epoch < 60 else (60 if epoch < 80 else 80)))) / stage_epochs
-    #             # 使用余弦衰减公式
-    #             return (1 + math.cos(math.pi * progress)) / 2 * (initial_lr / self.hparams.initial_learning_rate)
-    #         else:
-    #             return 1e-5 / self.hparams.initial_learning_rate  # 超过200的epoch时的学习率
-
-    #     scheduler_disc = torch.optim.lr_scheduler.LambdaLR(opt_disc, lr_lambda)
-    #     scheduler_gen = torch.optim.lr_scheduler.LambdaLR(opt_gen, lr_lambda)
-
-    #     return (
-    #         [opt_disc, opt_gen],
-    #         [
-    #             {"scheduler": scheduler_disc, "interval": "epoch"},
-    #             {"scheduler": scheduler_gen, "interval": "epoch"},
-    #         ],
-    #     )
 
 
     def forward(self, audio_input, **kwargs):
@@ -459,14 +405,6 @@ class VocosExp(pl.LightningModule):
         audio_output = self.head(x)
         return audio_output
 
-    # def optimizer_step(self, *args, **kwargs):
-    #     # 这里已经loss.backward()了！！！
-    #     for n, p in self.feature_extractor.simvq_quantizer.named_parameters():
-    #         print(n, p.grad)
-    #         if p.grad is not None:
-    #             print(f"Grad {n}: mean={p.grad.abs().mean().item()}")
-    #     super().optimizer_step(*args, **kwargs)
-
 
     def training_step(self, batch, batch_idx, optimizer_idx, **kwargs):
         audio_input = batch
@@ -659,15 +597,6 @@ class VocosExp(pl.LightningModule):
         }
 
     
-    # def prepare_audio(self, audio):
-    #     # 转为 float32 + 归一化（如果没归一化的话）
-    #     audio_np = audio.data.cpu().float().numpy()
-    #     if audio_np.ndim == 1:
-    #         audio_np = audio_np[None, :]  # (1, num_samples)
-    #     elif audio_np.ndim == 2 and audio_np.shape[0] != 1:
-    #         audio_np = audio_np[:1, :]  # 取前一条
-    #     return audio_np.astype("float32")
-
     def prepare_audio(self, audio):
         # audio: torch.Tensor, shape: [num_samples] or [B, num_samples]
         audio = audio.data.cpu().float()
@@ -822,7 +751,7 @@ class WavTokenizer(VocosExp):
         self.multiresddisc = MultiResolutionDiscriminator(num_embeddings=len(self.feature_extractor.bandwidths))
         self.dac = DACDiscriminator()
         if self.resume:
-            print('加载预训练模型:', self.resume_model)
+            print('Loaded from:', self.resume_model)
             
             state_dict_raw = torch.load(self.resume_model, map_location=self.device)['state_dict']
             state_dict_fa_qa = dict()
@@ -861,8 +790,6 @@ class WavTokenizer(VocosExp):
                     state_dict_dac[k[4:]] = v
                 # if k.startswith('duration_predictor.'):
                 #     state_dict_dr[k[19:]] = v
-            # breakpoint()
-            # 是否加载量化器部分权重
             feature_extractor.encodec.quantizer.load_state_dict(state_dict_fa_qa, strict=True)
             feature_extractor.encodec.encoder.load_state_dict(state_dict_fa_en, strict=True)
             feature_extractor.encodec.decoder.load_state_dict(state_dict_fa_de, strict=True)
@@ -877,7 +804,6 @@ class WavTokenizer(VocosExp):
             self.dac.load_state_dict(state_dict_dac, strict=True)
             # self.duration_predictor.load_state_dict(state_dict_dr, strict=True)
 
-            # 固定encoder权重，促进VQ和duration predictor的学习
             # for param in self.feature_extractor.encodec.encoder.parameters():
             #     param.requires_grad = False
             # for param in self.feature_extractor.encodec.decoder.parameters():
@@ -893,7 +819,6 @@ class WavTokenizer(VocosExp):
         #     config_path = self.resume_config
         #     model_path = self.resume_model
         #     self.pretrained_load(config_path, model_path)
-        #     print('加载预训练模型:', model_path)
         bandwidth_id = torch.randint(low=0, high=len(self.feature_extractor.bandwidths), size=(1,), device=self.device,)
         output = super().training_step(*args, bandwidth_id=bandwidth_id)
         return output

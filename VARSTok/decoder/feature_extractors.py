@@ -8,9 +8,7 @@ from decoder.modules import safe_log
 from encoder.modules import SEANetEncoder, SEANetDecoder
 from encoder import EncodecModel
 from encoder.quantization import ResidualVectorQuantizer
-# from encoder.clustering import SequentialDPClustering
-from encoder.clustering_acc import SequentialDPClustering
-from encoder.quantization.quantize import SimVQ1D
+from encoder.clustering_acc import SequentialDPClustering, SequentialDPClusteringFixed
 
 
 class FeatureExtractor(nn.Module):
@@ -98,14 +96,8 @@ class EncodecFeatures(FeatureExtractor):
         self.bandwidths = bandwidths
 
         self.cluster = SequentialDPClustering()
-        # self.simvq_quantizer = SimVQ1D(n_e=vq_bins, e_dim=512)
-
-    # @torch.no_grad()
-    # def get_encodec_codes(self, audio):
-    #     audio = audio.unsqueeze(1)
-    #     emb = self.encodec.encoder(audio)
-    #     codes = self.encodec.quantizer.encode(emb, self.encodec.frame_rate, self.encodec.bandwidth)
-    #     return codes
+        # if you're plan to retrain the model, use the following line for better performance
+        # self.cluster = SequentialDPClusteringFixed()
 
     def forward(self, audio: torch.Tensor, bandwidth_id: torch.Tensor):
         if self.training:
@@ -113,9 +105,6 @@ class EncodecFeatures(FeatureExtractor):
 
         audio = audio.unsqueeze(1)                
         emb = self.encodec.encoder(audio)
-        
-        # 密度聚类
-        clustered, cluster_lengths = self.cluster(emb) # [B, D, T'], [B, T']
 
         q_res = self.encodec.quantizer(emb, self.frame_rate, bandwidth=self.bandwidths[bandwidth_id])
         quantized = q_res.quantized
@@ -131,9 +120,6 @@ class EncodecFeatures(FeatureExtractor):
         audio = audio.unsqueeze(1)                
         emb = self.encodec.encoder(audio)
 
-        # print("here")
-        
-        # 密度聚类
         clustered, cluster_lengths = self.cluster(emb) # [B, D, T'], [B, T']
         clustered_mask = cluster_lengths > 0
         
@@ -146,11 +132,9 @@ class EncodecFeatures(FeatureExtractor):
 
         audio = audio.unsqueeze(1)                
         emb = self.encodec.encoder(audio)
-        
-        # 密度聚类
+
         clustered, cluster_lengths = self.cluster(emb) # [B, D, T'], [B, T']
         clustered_mask = cluster_lengths > 0
-        # print("here")
 
         q_res = self.encodec.quantizer(clustered, self.frame_rate, bandwidth=self.bandwidths[bandwidth_id], mask=clustered_mask)
         quantized = q_res.quantized
@@ -177,8 +161,7 @@ class EncodecFeatures(FeatureExtractor):
 
         audio = audio.unsqueeze(1)                  # audio(16,24000)
         emb = self.encodec.encoder(audio)
-        
-        # 密度聚类
+
         clustered, cluster_lengths = self.cluster(emb) # [B, D, T'], [B, T']
         clustered_mask = cluster_lengths > 0
 

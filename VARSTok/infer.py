@@ -23,7 +23,6 @@ tmptmp=out_folder+"/"+ll
 os.system("rm -r %s"%(tmptmp))
 os.system("mkdir -p %s"%(tmptmp))
 
-# 自己数据模型加载
 config_path = "/path/to/config.yaml"
 model_path = "/path/to/ckpt"
 varstok = VARSTok.from_pretrained(config_path, model_path)
@@ -35,9 +34,6 @@ with open(input_path,'r') as fin:
 x = [i.strip() for i in x]
 x = x[:]
 
-# x= ["/cpfs_speech3/zhengruichen.zrc/WavTokenizer-copy/gaussian_white_noise_24000Hz.wav"]
-
-# 完成一些加速处理
 
 features_all=[]
 cluster_lengths_all = []
