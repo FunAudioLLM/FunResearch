@@ -9,7 +9,8 @@ Welcome to **Fun Research**! This repository is maintained by the **Speech Team 
 
 ## Featured Projects
 Explore our latest research implementations:
-1. "MelodyEdit: Zero-shot Music Editing with Disentangled Inversion Control", ACM Multimedia 2025
+1. [Say More with Less: Variable-Frame-Rate Speech Tokenization via Adaptive Clustering and Implicit Duration Coding](VARSTok), AAAI 2026 (oral)
+
 
 
 ## Disclaimer
