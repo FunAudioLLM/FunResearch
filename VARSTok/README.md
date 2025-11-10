@@ -1,5 +1,7 @@
 # VARSTok
-A fully dynamic, variable-frame-rate speech tokenizer that can be seamlessly integrated into LLMs. 
+VARSTok is a fully dynamic, variable-frame-rate speech tokenizer that can be seamlessly integrated into LLMs. 
+
+This is the official code implementation for the paper "Say More with Less: Variable-Frame-Rate Speech Tokenization via Adaptive Clustering and Implicit Duration Coding".
 
 This paper has been accepted as an **oral** presentaion at **AAAI 2026**.
 
