@@ -183,9 +183,9 @@ if __name__ == "__main__":
                     help="根目录（递归查找名为 clipped 的文件夹）")
     ap.add_argument("--min_sec", type=float, default=2.0, help="删除条件：小于此秒数默认2.0")
     ap.add_argument("--max_sec", type=float, default=60.0, help="删除条件：大于此秒数默认60.0")
-    ap.add_argument("--workers", type=int, default=max(4, (os.cpu_count() or 1) * 4),
+    ap.add_argument("--workers", type=int, default=max(4, (os.cpu_count() or 1) * 2),
                     help=f"读取并发线程数")
-    ap.add_argument("--max-outstanding", type=int, default=default_workers * 4,
+    ap.add_argument("--max-outstanding", type=int, default=os.cpu_count() * 4,
                     help="futures 数量限制")
     ap.add_argument("--execute", action="store_true",
                     help="确认执行删除")

@@ -1,6 +1,8 @@
+addict
 beartype==0.14.1
 curl_cffi
 dashscope
+datasets
 einops==0.8.1
 face_alignment==1.4.1
 fastcluster==1.2.6
@@ -31,7 +33,8 @@ PyYAML==6.0.2
 Requests
 rotary_embedding_torch==0.8.9
 scikit_learn==1.3.2
->scipy=1.10.0
+scipy>=1.10.0
+simplejson
 soundfile==0.13.1
 torch==2.4.1
 torchaudio==2.4.1
