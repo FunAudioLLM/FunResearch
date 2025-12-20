@@ -38,7 +38,7 @@ python setup.py
 ```
 
 ### Datasets
-You can access [FunCineForge Datasets Website](https://xuan3986.github.io/FunCineForge/) to get our dataset. If you want to produce your own data, 
+You can access [FunCineForge Datasets]() Website to get our dataset. If you want to produce your own data, 
 we recommend that you refer to the following requirements to collect the corresponding movies and television series.
 
 1. Video source: Television series or movies, non documentaries, more monologues or dialogue scenes, clear and unobstructed faces (such as without masks and veils).
