@@ -88,7 +88,7 @@ python build_datasets.py --root_dir datasets/clean/zh --out_dir datasets/clean -
 ## 近期更新 🔨
 
 - 2025/12/18 FunCineForge 源代码上线！🔥
-- 2025/12/19 [数据集](https://xuan3986.github.io/FunCineForge/)开源！🔥
+<!-- - 2025/12/19 [数据集](https://xuan3986.github.io/FunCineForge/)开源！🔥 -->
 
 <a name="社区交流"></a>
 ## 社区交流 🍟
