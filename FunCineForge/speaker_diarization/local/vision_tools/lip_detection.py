@@ -1,12 +1,12 @@
 import os
 import cv2
-from face_alignment import FaceAlignment, LandmarksType
+from .api import FaceAlignment, LandmarksType
 import numpy as np
 
 class LipDetector:
     """
-    在 face crop 上检测嘴巴位置。
-    使用 face_alignment 包的 FAN 模型实现
+    在 face crop 上检测唇部位置，
+    基于修改的 face_alignment api 调用 FAN 模型实现。
     """
 
     def __init__(
@@ -23,7 +23,7 @@ class LipDetector:
         
         if model_dir is not None:
             model_path = os.path.join(model_dir, 'fun_2d.pth')
-            net_path = os.path.join(model_dir, 'fun_2d.zip')
+            net_path = os.path.join(model_dir, 'fun_2d.zip') # 使用预下载模型避免长时间下载
             print(f"Loading FAN model from {model_path} on {device_str}...")
         else:
             model_path = None
