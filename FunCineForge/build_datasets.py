@@ -15,6 +15,7 @@ from collections import Counter
 from collections import defaultdict
 from pypinyin import lazy_pinyin, Style
 from transformers import AutoTokenizer
+import Levenshtein
 
 
 def find_all_files(rttm_path: str) -> dict:
@@ -123,6 +124,7 @@ _ID_MAP = {
     "speaker_A": "1", "speaker_B": "2", "speaker_C": "3", "speaker_D": "4", "speaker_E": "5",
     "speaker_1": "1", "speaker_2": "2", "speaker_3": "3", "speaker_4": "4", "speaker_5": "5",
     "S1": "1", "S2": "2", "S3": "3", "S4": "4", "S5": "5"}
+
 def try_fix_foreign(text: str) -> Tuple[str, bool]:
     changed = False
     # 1) "Speaker|ID|Character|Actor|Role N" (N: 1-9)
@@ -201,6 +203,34 @@ def _atomic_writeback(obj: dict, path: str) -> None:
                 os.remove(tmp_path)
         except Exception:
             print(f"[ERROR] 临时文件移除失败 {tmp_path}")
+
+def remove_punctuation(text):
+    """去除文本中的标点符号"""
+    if not text:
+        return ""
+    text = re.sub(r'\s+', '', text)
+    punctuation = '，。、！？；：“”‘’《》【】（）「」….,!?;:\'"\\|<>[]()-+=*&%#@……&*'
+    for punc in punctuation:
+        text = text.replace(punc, '')
+    return text
+
+def calculate_text_similarity(text1, text2):
+    """
+    计算两个文本的编辑距离相似度（不考虑标点）
+    """
+    text1_clean = remove_punctuation(text1)
+    text2_clean = remove_punctuation(text2)
+    
+    # 计算编辑距离
+    distance = Levenshtein.distance(text1_clean, text2_clean)
+    
+    # 相似度比
+    max_len = max(len(text1_clean), len(text2_clean))
+    if max_len == 0:
+        similarity = 1.0
+    else:
+        similarity = 1 - (distance / max_len)
+    return similarity
     
 def parse_rttm_speakers(rttm_path: str) -> Set[str]:
     """
@@ -220,6 +250,15 @@ def parse_rttm_speakers(rttm_path: str) -> Set[str]:
             else:
                 raise ValueError(f"解析 RTTM 失败 {rttm_path}")
     return speakers
+
+def parse_srt_text(srt_path):
+    """
+    解析 srt 文件，返回字幕文本。
+    """
+    with open(srt_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        return lines[2].strip()
+
 
 def parse_rttm_dialogue(rttm_path: str, meta: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -547,6 +586,18 @@ def process_single_rttm(rttm_path, tokenizer):
             "status": "skip",
             "reason": "cot内容异常"
         }
+    # corrected 文本与 srt 文本编辑距离
+    srt_text = parse_srt_text(files["srt"])
+    cot_text = cot_obj.get("text")
+    text_sim = calculate_text_similarity(cot_text, srt_text)
+    if text_sim < 0.5:
+        print(f"[WARNING] cot文本与srt文本相似度过低 {basename} 相似度: {text_sim:.2f}")
+        return {
+            "basename": basename,
+            "status": "skip",
+            "reason": f"cot文本与srt文本相似度过低: {text_sim:.2f}"
+        }
+    # 解析 rttm 说话人
     rttm_spk = parse_rttm_speakers(rttm_path)
     is_equal = rttm_spk == cot_spk
     rttm_is_subset = (rttm_spk.issubset(cot_spk) and not is_equal)
@@ -627,7 +678,7 @@ def batch_process(root_dir: str, output_dir: str, tokenizer_path: str, workers: 
     
     total_count = len(rttm_list)
     skip_count = 0
-    no_cot = 0
+    not_sim = 0
     sucess_count = 0
     rttm_subset_count = 0
     cot_subset_count = 0
@@ -645,8 +696,8 @@ def batch_process(root_dir: str, output_dir: str, tokenizer_path: str, workers: 
             result = fut.result()
             if result["status"] == "skip":
                 skip_count += 1
-                if "cot_wav" in result["reason"]:
-                    no_cot += 1
+                if "本相似度过低" in result["reason"]:
+                    not_sim += 1
             else:
                 sucess_count += 1
                 if result["rttm_is_subset"]:
@@ -691,7 +742,7 @@ def batch_process(root_dir: str, output_dir: str, tokenizer_path: str, workers: 
     print(f"Total RTTM files: {total_count}")
     print(f"Successful processed: {sucess_count}")
     print(f"Skip: {skip_count}")
-    print(f"No cot_wav: {no_cot}") 
+    print(f"CoT 与 SRT 文本偏差过大: {not_sim}") 
     print(f"RTTM ⊂ COT count: {rttm_subset_count}")
     print(f"COT ⊂ RTTM count: {cot_subset_count}")
     print(f"RTTM == COT count: {equal_count}")

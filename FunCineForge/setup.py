@@ -11,10 +11,7 @@ from pathlib import Path
 from huggingface_hub import snapshot_download
 
 # 配置信息
-REPO_URL = "https://huggingface.co/xuan3986/FunCineForge"
 TEMP_DIR = "temp_hf_models"
-
-# 需要移动的文件配置
 FILE_MAPPINGS = [
     {
         "source": ["speech_campplus", "speech_fsmn_vad", "asd.onnx", "face_recog_ir101.onnx", "fqa.onnx", "fun_2d.pth", "fun_2d.zip", "version-RFB-320.onnx"],

@@ -29,6 +29,7 @@ pandas==2.0.3
 pyannote.audio
 pypinyin==0.44.0
 python_speech_features==0.6
+python-Levenshtein
 PyYAML==6.0.2
 Requests
 rotary_embedding_torch==0.8.9

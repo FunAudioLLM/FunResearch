@@ -1,6 +1,6 @@
-### <p align="center">「简体中文 | [English](./README_en.md)」</p>
+### <p align="center">「English | [简体中文](./README_zh.md)」</p>
 
-**<p align="center"> 🧠 FunCineForge：探索大规模影视剧多模态数据集端到端生产工具 </p>**
+**<p align="center"> 🎬 FunCineForge: A Unified Dataset Pipeline and Model for Zero-Shot Movie Dubbing in Diverse Cinematic Scenes </p>**
 
 <div align="center">
 
@@ -11,98 +11,112 @@
 </div>
 
 <div align="center">  
-<h4><a href="#快速开始">快速开始</a>
-｜<a href="#合成样例">合成样例</a>
-｜<a href="#近期更新">近期更新</a>
-｜<a href="#社区交流">社区交流</a>
+<h4><a href="#Dataset&Demo">Dataset & Demo</a>
+｜<a href="#Dataset-Pipeline">Dataset Pipeline</a>
+｜<a href="#Dubbing-Model">Dubbing Model</a>
+｜<a href="#Recent-Updates">Recent Updates</a>
+｜<a href="#Comminicate">Comminicate</a>
 </h4>
 </div>
 
-**FunCineForge**是一款完全开源、本地部署的全流程生产多模态语音数据集工具，实现从源头批量影视数据到
-文本、语音、视频、线索、时间戳等信息的全模态数据，用于我们 VTTS 影视配音大模型的训练。
-所有的预训练模型均已上传到 [Hugging Face](https://huggingface.co/xuan3986/FunCineForge)。此外，我们开源了由 FunCineForge 生产的数据集。
+**FunCineForge** contains an end-to-end dataset pipeline for producing large-scale dubbing datasets and an MLLM-based dubbing model designed for diverse cinematic scenes. Using this pipeline, we constructed the first large-scale Chinese television dubbing dataset CineDub-CN, which includes rich annotations and diverse scenes. In monologue, narration, dialogue, and multi-speaker scenes, our dubbing model consistently outperforms state-of-the-art methods in terms of audio quality, lip-sync, timbre transition, and instruction following.
+
+<a name="Dataset&Demo"></a>
+## Dataset & Demo 🎬
+You can access this [Website](https://anonymous.4open.science/w/FunCineForge/) to get our CineDub-CN dataset samples and demo samples. 
 
 
-<a name="快速开始"></a>
-## 快速开始 🚀
+<a name="Dataset-Pipeline"></a>
+## Dataset Pipeline 🔨
 
-### 环境安装
+### Environmental Installation
 
-FunCineForge 的运行仅依赖于一个 Python 环境。
+FunCineForge dataset pipeline toolkit only relies on a Python environment to run.
 ```shell
-# 克隆 FunCineForge 仓库
-git clone git@github.com:xuan3986/FunCineForge.git
+# Conda
+git clone git@github.com:FunAudioLLM/FunCineForge.git
 conda create -n FunCineForge python=3.8.20 -y && conda activate FunCineForge
 sudo apt-get install ffmpeg
-# 初始化设置
+# Initial settings
 cd FunCineForge
 python setup.py
 ```
 
-### 数据集
-您可以访问 [FunCineForge Datasets]() 网址（暂不开放）来获取我们的数据集。如果您想自行生产数据，我们建议您参考下面的要求收集相应的影视剧。
+### Data collection
+If you want to produce your own data, 
+we recommend that you refer to the following requirements to collect the corresponding movies or television series.
 
-1. 视频来源：电视剧或电影，非纪录片，人物独白或对话场景较多，人脸清晰且无遮挡（如无面罩、面纱）。
-2. 语音要求：发音标准，吐字清晰，人声突出。避免方言、背景噪音过大或口语感过强的素材。
-3. 画面质量：高像素，面部细节清晰，光线充足，避开极端阴暗或强背光的画面场景。
+1. Video source: TV dramas or movies, non documentaries, with more monologues or dialogue scenes, clear and unobstructed faces (such as without masks and veils).
+2. Speech Requirements: Standard pronunciation, clear articulation, prominent human voice. Avoid materials with strong dialects, excessive background noise, or strong colloquialism.
+3. Image Requirements: High resolution, clear facial details, sufficient lighting, avoiding extremely dark or strong backlit scenes.
 
-### 使用方法
+### How to use
 
-- 规范视频格式为 mp4，libx264 & libmp3lame 编码；裁剪影视剧片头片尾（默认片头片尾各裁剪5分钟）
+- Standardize the video format to mp4, using libx264 & libmp3lame encoding; crop the opening and ending credits of television series (the default is to crop 5 minutes each).
 ```shell
 python normalize_mp4.py --root datasets/raw_zh
 python trim_video.py --root datasets/raw_zh
 ```
-- [Video Clip](./video_clip/README.md). 对长序列视频 VAD，得到句子级的片段，通过 ASR 得到转录文本，生成字幕文件。再将长序列视频剪裁为片段。
+- [Video Clip](./video_clip/README.md). For long-sequence video, VAD is used to obtain sentence-level segments, which are then transcribed using ASR to generate subtitle files. The long-sequence video is then cut into segments.
 ```shell
 cd video_clip
 bash run.sh --stage 1 --stop_stage 2 --input datasets/raw_zh --output datasets/clean/zh --lang zh
 ```
-- 视频时长限制和字幕文件清洗。(不加 --execute 只会打印预删除文件，检查无误后添加 --execute 运行确认删除)
+- Video duration limit and subtitle file cleaning. (Without --execute, only pre-deleted files will be printed. After checking, add --execute to confirm the deletion.)
 ```shell
 python clean_video.py --root datasets/clean/zh --execute
 python clean_srt.py --root datasets/clean/zh --execute
 ```
-- [Speech Separation](./speech_separation/README.md). 音频进行人声乐声分离。
+- [Speech Separation](./speech_separation/README.md). The audio is used to separate the vocals from the instrumental music.
 ```shell
 cd speech_separation
 python run.py --root datasets/clean/zh --gpus 0 1 2 3
 ```
-- [Speaker Diarization](./speaker_diarization/README.md). 多模态主动说话人识别，得到 RTTM 文件；识别说话人的面部帧，提取帧级的说话人面部和唇部原始数据，从面部帧中识别说话帧，提取说话帧的面部特征。
+- [Speaker Diarization](./speaker_diarization/README.md). Multimodal active speaker recognition obtains RTTM files; identifies the speaker's facial frames, extracts frame-level speaker face and lip raw data, identifies speaking frames from facial frames, and extracts facial features of speaking frames.
 ```shell
 cd speaker_diarization
 bash run.sh --stage 1 --stop_stage 4 --hf_access_token hf_xxx --root datasets/clean/zh --gpus "0 1 2 3"
 ```
-- 基于多模态大模型，输入音频，ASR 文本，RTTM 文件，通过思维链得到情感线索，并采样大模型矫正小模型方案降低 ASR 词错率，同时标注角色年龄性别和音色属性信息。实验验证大模型+小模型方案的 WER 从 3.2% 降低至 0.6%，speaker ID 的错误率从 4.3% 降低至 1.2%，与人工转录质量相当甚至更优。添加 --resume 实现断点 COT，以防止重复文件COT推理浪费资源。
+- Based on a mllm, the system uses audio, ASR text, and RTTM files as input. It extracts emotional clues through thought chaining and uses the large model to correct the small model solution to reduce the ASR. It also annotates character age, gender, and timbre information. Experimental results show that the large-model + small-model solution reduces the WER from 3.2% to 0.6% and the speaker ID error rate from 4.3% to 1.2%, achieving quality comparable to or even better than manual transcription. Adding the --resume enables breakpoint COT inference to prevent wasted resources from repeated COT inferences.
 ```shell
 python cot.py --root_dir datasets/clean/zh --provider google --model gemini-2.5-flash --api_key xxx --resume
 ```
-- （可选）基于 CosyVoice3 tokenizer 提取 speech tokens 用于大模型训练。
+- (Reference) Extract speech tokens based on the CosyVoice3 tokenizer for llm training.
 ```shell
 python speech_tokenizer.py --root datasets/clean/zh
 ```
-- （参考）结果清洗并纠正；视频片段类型（独白、对话、多人、旁白）判断；切分训练集和测试集；生成索引。
+- (Reference) COT results are cleaned and corrected; video clip types (monologue, dialogue, multi-person, narration) are determined; training and test sets are split; and indexes are generated.
 ```shell
 python build_datasets.py --root_dir datasets/clean/zh --out_dir datasets/clean --save
 ```
 
-<a name="合成样例"></a>
-## 合成样例 🎬
-我们使用 FunCineForge 从数百部电视剧中生成的大规模多模态数据集训练了一个 VTTS 配音大模型。下面链接展示了合成结果示例。
+<a name="Dubbing-Model"></a>
+## Dubbing Model ⚙️
+Please stay tuned.
 
-[演示视频](https://speech-lab-share-data.oss-cn-shanghai.aliyuncs.com/FunCineForge/demo.mp4)
 
-<a name="近期更新"></a>
-## 近期更新 🔨
 
-- 2025/12/18 FunCineForge 源代码上线！🔥
-<!-- - 2025/12/19 [数据集](https://xuan3986.github.io/FunCineForge/)开源！🔥 -->
+<a name="Recent-Updates"></a>
+## Recent Updates 🚀
+- 2025/12/18: FunCineForge dataset pipeline toolkit is online! 🔥
+- 2026/01/19: Demo samples and dataset samples released. 🔥
 
-<a name="社区交流"></a>
-## 社区交流 🍟
-FunCineForge 开源项目由通义实验室语音团队开发并维护，我们欢迎您加入 Fun Research 社区，参与讨论，和合作开发等。
-[FunASR](https://github.com/modelscope/FunASR) 是阿里巴巴通义实验室开源的语音工具包之一，欢迎各位使用。
 
-有任何问题请联系本项目[开发者](https://github.com/xuan3986)。
 
-⭐ 希望各位支持FunCineForge，感谢大家。
+<a name="Comminicate"></a>
+## Comminicate 🍟
+The FunCineForge open-source project is developed and maintained by the Tongyi Lab Speech Team and student from the National Engineering Research Center of Speech and Language Information Processing.
+We welcome you to participate in discussions on FunCineForge GitHub Issues or contact us for collaborative development.
+For any questions, you can contact the [developer](mailto:jxliu@mail.ustc.edu.cn).
+
+⭐ Hope you will support FunCineForge. Thank you.
+
+### Disclaimer
+
+This repository contains research artifacts:
+
+⚠️ Not an official Alibaba product
+
+⚠️ Released for academic/research purposes only
+
+⚠️ FunCineForge is subject to specific license terms
