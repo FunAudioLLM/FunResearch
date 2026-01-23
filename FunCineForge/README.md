@@ -38,7 +38,6 @@ FunCineForge dataset pipeline toolkit only relies on a Python environment to run
 ```shell
 # Conda
 git clone git@github.com:FunAudioLLM/FunResearch.git
-cd FunCineForge
 conda create -n FunCineForge python=3.8.20 -y && conda activate FunCineForge
 sudo apt-get install ffmpeg
 # Initial settings
