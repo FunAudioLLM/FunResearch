@@ -8,7 +8,6 @@ import subprocess
 import shutil
 import time
 from pathlib import Path
-from huggingface_hub import snapshot_download
 
 # 配置信息
 TEMP_DIR = "temp_hf_models"
@@ -103,6 +102,7 @@ def download_huggingface_models():
     temp_path.mkdir(exist_ok=True)
     
     try:
+        from huggingface_hub import snapshot_download
         snapshot_download(
             repo_id="xuan3986/FunCineForge",
             local_dir=str(temp_path),

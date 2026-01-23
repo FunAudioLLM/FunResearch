@@ -1,6 +1,8 @@
 ### <p align="center">「[English](./README.md) | 简体中文」</p>
 
-**<p align="center"> 🎬 FunCineForge：一种用于多样化影视场景零样本配音的统一数据集管道与模型 </p>**
+<p align="center">
+<b>🎬 FunCineForge：一种用于多样化影视场景零样本配音的统一数据集管道与模型</b>
+</p>
 
 <div align="center">
 
@@ -33,7 +35,8 @@
 FunCineForge 数据集管道工具包的运行仅依赖于一个 Python 环境。
 ```shell
 # Conda
-git clone git@github.com:FunAudioLLM/FunCineForge.git
+git clone git@github.com:FunAudioLLM/FunResearch.git
+cd FunCineForge
 conda create -n FunCineForge python=3.8.20 -y && conda activate FunCineForge
 sudo apt-get install ffmpeg
 # 初始化设置

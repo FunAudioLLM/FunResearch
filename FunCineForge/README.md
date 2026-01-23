@@ -1,6 +1,9 @@
 ### <p align="center">「English | [简体中文](./README_zh.md)」</p>
 
-**<p align="center"> 🎬 FunCineForge: A Unified Dataset Pipeline and Model for Zero-Shot Movie Dubbing in Diverse Cinematic Scenes </p>**
+<p align="center">
+<b>🎬 FunCineForge: A Unified Dataset Pipeline and Model for Zero-Shot Movie Dubbing<br>
+in Diverse Cinematic Scenes</b>
+</p>
 
 <div align="center">
 
@@ -34,7 +37,8 @@ You can access this [Website](https://anonymous.4open.science/w/FunCineForge/) t
 FunCineForge dataset pipeline toolkit only relies on a Python environment to run.
 ```shell
 # Conda
-git clone git@github.com:FunAudioLLM/FunCineForge.git
+git clone git@github.com:FunAudioLLM/FunResearch.git
+cd FunCineForge
 conda create -n FunCineForge python=3.8.20 -y && conda activate FunCineForge
 sudo apt-get install ffmpeg
 # Initial settings
