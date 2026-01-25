@@ -17,6 +17,7 @@
 ｜<a href="#数据集管道">数据集管道</a>
 ｜<a href="#配音模型">配音模型</a>
 ｜<a href="#近期更新">近期更新</a>
+｜<a href="#发表">发表</a>
 ｜<a href="#社区交流">社区交流</a>
 </h4>
 </div>
@@ -36,7 +37,7 @@ FunCineForge 数据集管道工具包的运行仅依赖于一个 Python 环境�
 ```shell
 # Conda
 git clone git@github.com:FunAudioLLM/FunResearch.git
-conda create -n FunCineForge python=3.8.20 -y && conda activate FunCineForge
+conda create -n FunCineForge python=3.10 -y && conda activate FunCineForge
 sudo apt-get install ffmpeg
 # 初始化设置
 cd FunCineForge
@@ -98,6 +99,21 @@ python build_datasets.py --root_dir datasets/clean/zh --out_dir datasets/clean -
 ## 近期更新 🚀
 - 2025/12/18：FunCineForge 数据集管道工具包上线！🔥
 - 2026/01/19：发布演示样例和数据集样例。 🔥
+- 2026/01/25：修复了一些环境和运行问题。
+
+<a name="发表"></a>
+## 发表 📚
+如果您使用了我们的数据集或代码，请引用以下论文：
+<pre>
+@misc{liu2026funcineforgeunifieddatasettoolkit,
+    title={FunCineForge: A Unified Dataset Toolkit and Model for Zero-Shot Movie Dubbing in Diverse Cinematic Scenes}, 
+    author={Jiaxuan Liu and Yang Xiang and Han Zhao and Xiangang Li and Zhenhua Ling},
+    year={2026},
+    eprint={2601.14777},
+    archivePrefix={arXiv},
+    primaryClass={cs.CV},
+}
+</pre>
 
 
 <a name="社区交流"></a>
