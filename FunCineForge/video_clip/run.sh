@@ -3,6 +3,7 @@ stop_stage=2
 input=/nfs/yanzhang.ljx/workspace/datasets/YingShi/raw_zh
 output=/nfs/yanzhang.ljx/workspace/datasets/YingShi/clean/zh
 lang='zh'
+device='cpu'
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -11,6 +12,7 @@ while [[ $# -gt 0 ]]; do
         --input)        input="$2" ;;
         --output)       output="$2"      ;;
         --lang)         lang="$2"      ;;
+        --device)       device="$2"      ;;
         *)
             echo "未知参数: $1" >&2
             exit 1
@@ -27,6 +29,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
                 --output_dir $output \
                 --sd_switch "yes" \
                 --lang $lang \
+                --device $device \
                 --skip_processed
 fi
 
@@ -36,5 +39,6 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
                 --stage 2 \
                 --file $input \
                 --output_dir $output \
-                --lang $lang
+                --lang $lang \
+                --device "cpu"
 fi

@@ -1,7 +1,8 @@
 import os
+import torch
 import librosa
 import argparse
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 from moviepy.editor import VideoFileClip
 import concurrent.futures
@@ -158,14 +159,14 @@ class VideoClipper():
 
         return message
     
-def init_models(lang='zh'):
+def init_models(lang='zh', device='cpu'):
     if lang == 'zh':
         funasr_model = AutoModel(
             model="iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
             vad_model="damo/speech_fsmn_vad_zh-cn-16k-common-pytorch",
             punc_model="damo/punc_ct-transformer_zh-cn-common-vocab272727-pytorch",
             spk_model="damo/speech_campplus_sv_zh-cn_16k-common",
-            device="cpu"
+            device=device
         )
     elif lang == 'en':
         funasr_model = AutoModel(
@@ -173,17 +174,31 @@ def init_models(lang='zh'):
             vad_model="damo/speech_fsmn_vad_zh-cn-16k-common-pytorch",
             punc_model="damo/punc_ct-transformer_cn-en-common-vocab471067-large",
             spk_model="damo/speech_campplus_sv_zh-cn_16k-common",
-            device="cpu"
+            device=device
         )
     else:
         raise ValueError(f"Unsupported language: {lang}")
     return funasr_model
 
 _process_local = None
-def _init_worker(lang: str):
+def _init_worker(lang: str, device: str):
     global _process_local
     if _process_local is None:
-        _process_local = {'model': init_models(lang)}
+        worker_id = mp.current_process().name
+        if '-' in worker_id:
+            try:
+                pid = int(worker_id.split('-')[-1])
+            except:
+                pid = 1
+        else:
+            pid = 1
+        if device == 'cuda':
+            gpu_id = (pid - 1) % torch.cuda.device_count()  # 循环分配 GPU
+            dev = f'cuda:{gpu_id}'
+            print(f"[Worker-{pid}] Using GPU {gpu_id}")
+        else:
+            dev = 'cpu'
+        _process_local = {'model': init_models(lang, dev)}
 
 
 def runner(stage, file, sd_switch, output_dir, lang):
@@ -305,6 +320,12 @@ def get_parser():
         default='zh',
         help="language"
     )
+    parser.add_argument(
+        "--device", 
+        type=str, 
+        default='cpu', 
+        choices=['cpu', 'cuda', 'gpu'], 
+        help='Device to run models on: cpu or cuda')
     return parser
 
 def main(cmd=None):
@@ -318,15 +339,33 @@ def main(cmd=None):
     output_dir = kwargs['output_dir']
     skip_processed = kwargs['skip_processed']
     lang = kwargs['lang']
+    device = kwargs['device']
+    
+    if device == 'gpu':
+        device = 'cuda'
+    if device == 'cuda':
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is not available, but device='cuda' was specified.")
+        num_gpus = torch.cuda.device_count()
+        max_workers = num_gpus
+        print(f"[INFO] Using {num_gpus} GPU(s)")
+    else:
+        # CPU 模式，可以使用更多 workers
+        max_workers = max(1, (mp.cpu_count() * 4) // 5)
+        print(f"[INFO] Using CPU with {max_workers} worker(s)")
     
     if os.path.isdir(file_or_folder):
         all_videos = find_all_videos(file_or_folder, base_output_dir=output_dir, skip_processed=skip_processed)
         print(f"Found {len(all_videos)} video files.")
 
-        with ProcessPoolExecutor(max_workers = max(1, (mp.cpu_count() * 3) // 4), initializer=_init_worker, initargs=(lang,)) as executor:
+        with ProcessPoolExecutor(
+            max_workers = max_workers, 
+            initializer=_init_worker, 
+            initargs=(lang, device)
+        ) as executor:
             futures = [executor.submit(process_single_video, file, stage, sd_switch, output_dir, lang)
                        for file in all_videos]
-            for future in concurrent.futures.as_completed(futures, timeout=10800):
+            for future in as_completed(futures, timeout=10800):
                 try:
                     future.result(timeout=10800)
                 except TimeoutError:
