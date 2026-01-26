@@ -64,7 +64,7 @@ python trim_video.py --root datasets/raw_zh
 - [Video Clip](./video_clip/README.md). For long-sequence video, VAD is used to obtain sentence-level segments, which are then transcribed using ASR to generate subtitle files. The long-sequence video is then cut into segments.
 ```shell
 cd video_clip
-bash run.sh --stage 1 --stop_stage 2 --input datasets/raw_zh --output datasets/clean/zh --lang zh
+bash run.sh --stage 1 --stop_stage 2 --input datasets/raw_zh --output datasets/clean/zh --lang zh --device cpu
 ```
 - Video duration limit and subtitle file cleaning. (Without --execute, only pre-deleted files will be printed. After checking, add --execute to confirm the deletion.)
 ```shell

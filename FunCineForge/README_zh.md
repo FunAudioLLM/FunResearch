@@ -61,7 +61,7 @@ python trim_video.py --root datasets/raw_zh
 - [Video Clip](./video_clip/README.md). 对长序列视频 VAD，得到句子级的片段，通过 ASR 得到转录文本，生成字幕文件。再将长序列视频剪裁为片段。
 ```shell
 cd video_clip
-bash run.sh --stage 1 --stop_stage 2 --input datasets/raw_zh --output datasets/clean/zh --lang zh
+bash run.sh --stage 1 --stop_stage 2 --input datasets/raw_zh --output datasets/clean/zh --lang zh --device cpu
 ```
 - 视频时长限制和字幕文件清洗。(不加 --execute 只会打印预删除文件，检查无误后添加 --execute 运行确认删除)
 ```shell
