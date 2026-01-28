@@ -27,6 +27,13 @@ def str2list(text):
     return elements
 
 class Text2SRT():
+    # 终结性标点（句尾合法结束符）
+    TERMINAL_PUNCTUATION_ZH = re.compile(r'[。！？]$', re.UNICODE)
+    TERMINAL_PUNCTUATION_EN = re.compile(r'[.!?]$', re.UNICODE)
+    
+    # 所有常见非终结性标点（需要被“升级”为句号的）
+    NON_TERMINAL_PUNCTUATION = re.compile(r'[,:;，、；：]$', re.UNICODE)
+
     def __init__(self, text, timestamp, offset=0):
         self.token_list = text
         self.timestamp = timestamp
@@ -34,38 +41,64 @@ class Text2SRT():
         self.start_sec, self.end_sec = start, end
         self.start_time = time_convert(start)
         self.end_time = time_convert(end)
+
+    def _is_chinese_char(self, char):
+        """判断字符是否为中文字符"""
+        return '\u4e00' <= char <= '\u9fff'
+
+    def _is_chinese_context(self, text):
+        """判断一段文本是否属于中文语境（中文字符占优）"""
+        chars = [c for c in text if c.isalnum() or self._is_chinese_char(c)]
+        if not chars:
+            return False
+        zh_count = sum(1 for c in chars if self._is_chinese_char(c))
+        return zh_count / len(chars) > 0.5
+
     def text(self):
-        # if isinstance(self.token_list, str):
-        #     return self.token_list.rstrip("、。，")
         if isinstance(self.token_list, str):
-            text = self.token_list
-            # 如果字符串非空
-            if text:
-                # 检查最后一个字符是否是标点
-                last_char = text[-1]
-                if last_char in "！？":
-                    return text
-                elif last_char in "、。，":  # 如果是中文标点则替换为句号
-                    return text[:-1] + "。"
-                else:  # 如果没有标点则添加句号
-                    return text + "。"
-            else:
+            text = self.token_list.strip()
+            if not text:
                 return ""
+            # 已以合法终结标点结尾（！？。!?）→ 保留
+            if (self.TERMINAL_PUNCTUATION_ZH.search(text) or 
+                self.TERMINAL_PUNCTUATION_EN.search(text)):
+                return text
+            # 以其他标点结尾（如 , ; : ， ； ： 、）→ 替换为句号
+            if self.NON_TERMINAL_PUNCTUATION.search(text):
+                is_zh = self._is_chinese_context(text)
+                return re.sub(self.NON_TERMINAL_PUNCTUATION, '。' if is_zh else '.', text)
+            # 无任何标点结尾 → 添加合适句号
+            is_zh = self._is_chinese_context(text)
+            return text + ('。' if is_zh else '.')
         else:
             res = ""
             for word in self.token_list:
-                if '\u4e00' <= word <= '\u9fff':
+                if self._is_chinese_char(word):
                     res += word
                 else:
                     res += " " + word
-            return res.lstrip().rstrip("、。，")
+            res = res.strip()
+            if not res:
+                return ""
+            # 同上三种情况
+            if (self.TERMINAL_PUNCTUATION_ZH.search(res) or 
+                self.TERMINAL_PUNCTUATION_EN.search(res)):
+                return res
+            if self.NON_TERMINAL_PUNCTUATION.search(res):
+                is_zh = self._is_chinese_context(res)
+                return re.sub(self.NON_TERMINAL_PUNCTUATION, '。' if is_zh else '.', res)
+            is_zh = self._is_chinese_context(res)
+            return res + ('。' if is_zh else '.')
+
     def srt(self, acc_ost=0.0):
         return "{} --> {}\n{}\n".format(
-            time_convert(self.start_sec+acc_ost*1000),
-            time_convert(self.end_sec+acc_ost*1000), 
-            self.text())
+            time_convert(self.start_sec + acc_ost * 1000),
+            time_convert(self.end_sec + acc_ost * 1000),
+            self.text()
+        )
+
     def time(self, acc_ost=0.0):
-        return (self.start_sec/1000+acc_ost, self.end_sec/1000+acc_ost)
+        return (self.start_sec / 1000 + acc_ost, self.end_sec / 1000 + acc_ost)
 
 
 def generate_srt(sentence_list):
@@ -84,13 +117,9 @@ def generate_srt_clip(sentence_list, start, end, begin_index=0, time_acc_ost=0.0
     cc = 1 + begin_index
     subs = []
     for _, sent in enumerate(sentence_list):
-        # if isinstance(sent['text'], str):
-        #     sent['text'] = str2list(sent['text'])
         if sent['timestamp'][-1][1] <= start:
-            # print("CASE0")
             continue
         if sent['timestamp'][0][0] >= end:
-            # print("CASE4")
             break
         # parts in between
         if (sent['timestamp'][-1][1] <= end and sent['timestamp'][0][0] > start) or (sent['timestamp'][-1][1] == end and sent['timestamp'][0][0] == start):

@@ -5,7 +5,6 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 from moviepy.editor import VideoFileClip
-import concurrent.futures
 from utils.subtitle_utils import generate_srt, generate_srt_clip
 from utils.argparse_tools import ArgumentParser
 from utils.trans_utils import write_state, load_state, convert_pcm_to_float
@@ -351,7 +350,7 @@ def main(cmd=None):
         print(f"[INFO] Using {num_gpus} GPU(s)")
     else:
         # CPU 模式，可以使用更多 workers
-        max_workers = max(1, (mp.cpu_count() * 4) // 5)
+        max_workers = max(1, mp.cpu_count())
         print(f"[INFO] Using CPU with {max_workers} worker(s)")
     
     if os.path.isdir(file_or_folder):
