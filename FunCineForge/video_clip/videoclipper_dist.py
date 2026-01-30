@@ -250,7 +250,15 @@ def runner(stage, file, sd_switch, output_dir, lang):
         message = audio_clipper.video_clip(state, output_dir=output_dir)
         print(f"✅ Stage 2 clip: {message}")
 
-
+def count_srt_entries(srt_path):
+    for enc in ['utf-8', 'gbk', 'gb2312']:
+        try:
+            with open(srt_path, 'r', encoding=enc) as f:
+                return sum(1 for line in f if line.strip())
+        except UnicodeDecodeError:
+            continue
+    return 0
+       
 def find_all_videos(folder, base_output_dir=None, stage=1, skip_processed=True, suffixes=None):
     if suffixes is None:
         suffixes = ['.mp4','.avi','.mkv','.flv','.mov','.webm','.ts','.mpeg']
@@ -266,11 +274,16 @@ def find_all_videos(folder, base_output_dir=None, stage=1, skip_processed=True, 
                     total_srt = os.path.join(output_subdir, 'total.srt')
                     clipped_dir = os.path.join(output_subdir, 'clipped')
                     if stage == 1 and os.path.exists(total_srt):
-                        print(f"Skipping already processed: {total_srt}")
-                        continue
-                    if stage == 2 and os.path.isdir(clipped_dir) and len(os.listdir(clipped_dir)) > 3:
-                        print(f"Skipping already processed: {clipped_dir}")
-                        continue
+                        if count_srt_entries(total_srt) != 0:
+                            print(f"Skipping already processed: {total_srt}")
+                            continue
+                    elif stage == 2:
+                        if os.path.exists(total_srt) and os.path.isdir(clipped_dir):
+                            expected_count = count_srt_entries(total_srt)
+                            actual_count = len(os.listdir(clipped_dir))
+                            if actual_count > 0 and actual_count >= expected_count - 30:
+                                print(f"Skipping stage 2: {clipped_dir} ({actual_count}/{expected_count} clips)")
+                                continue
                 all_videos.append(file_path)
     return all_videos
 
