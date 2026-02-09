@@ -25,7 +25,7 @@ def convert_to_mp4(original_path, converted_path):
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", original_path,
         "-c:v", "libx264", "-preset", "fast",
-        "-c:a", "libmp3lame", "-strict", "experimental",
+        "-c:a", "aac", "-strict", "experimental",
         converted_path
     ]
     result = subprocess.run(command, capture_output=True, text=True)

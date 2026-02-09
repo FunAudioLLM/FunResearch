@@ -153,6 +153,7 @@ class VideoClipper():
                     # clip the raw video and audio of this video
                     if vocal_file is None:
                         with VideoFileClip(video_file) as video:
+                            end = min(end, video.duration)
                             sub = video.subclip(start, end)
                             sub.write_videofile(video_clip, audio_codec="aac", verbose=False, logger=None)
                             sub.audio.write_audiofile(audio_clip, codec='pcm_s16le', verbose=False, logger=None)
@@ -160,23 +161,27 @@ class VideoClipper():
                             del sub
                     else:   # clip the raw video, raw audio, vocal and instrumental
                         with VideoFileClip(video_file) as video:
+                            end = min(end, video.duration)
                             sub_v = video.subclip(start, end)
                             sub_v.write_videofile(video_clip, audio_codec="aac", verbose=False, logger=None)
                             sub_v.close()
                             del sub_v
                         with AudioFileClip(vocal_file) as vocal:
+                            end = min(end, vocal.duration)
                             sub_vo = vocal.subclip(start, end)
                             sub_vo.write_audiofile(vocal_clip, codec='pcm_s16le', verbose=False, logger=None)
                             sub_vo.close()
                             del sub_vo
                         if instrumental_file:
                             with AudioFileClip(instrumental_file) as instrumental:
+                                end = min(end, instrumental.duration)
                                 sub_in = instrumental.subclip(start, end)
                                 sub_in.write_audiofile(instrumental_clip, codec='pcm_s16le', verbose=False, logger=None)
                                 sub_in.close()
                                 del sub_in
                         if raw_audio_file:
                             with AudioFileClip(raw_audio_file) as audio:
+                                end = min(end, audio.duration)
                                 sub_a = audio.subclip(start, end)
                                 sub_a.write_audiofile(audio_clip, codec='pcm_s16le', verbose=False, logger=None)
                                 sub_a.close()

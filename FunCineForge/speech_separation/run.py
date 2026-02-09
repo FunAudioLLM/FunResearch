@@ -3,13 +3,12 @@ import yaml
 import numpy as np
 import time
 from ml_collections import ConfigDict
-from tqdm import tqdm
 import sys
 import os
 import glob
 import torch
 import soundfile as sf
-import torch.nn as nn
+import librosa
 import multiprocessing as mp
 from typing import List
 from utils import demix_track, get_model_from_config
@@ -17,27 +16,24 @@ from utils import demix_track, get_model_from_config
 import warnings
 warnings.filterwarnings("ignore")
 
-def find_clipped_wavs(root: str) -> List[str]:
-    """递归查找 root 下所有 clipped 文件夹内的 wav 文件，
+def find_wavs(root: str) -> List[str]:
+    """递归查找 root 下所有的 wav 文件，
     并且保证这些 wav 文件还没有被人声乐声分离过。"""
-    pattern = os.path.join(root, '**', 'clipped', '*.wav')
+    pattern = os.path.join(root, '**', '*.wav')
     files = glob.glob(pattern, recursive=True)
     result = []
-
     for path in files:
-        clipped_dir = os.path.dirname(path)
-        parent_dir = os.path.dirname(clipped_dir.rstrip("/"))
-
-        vocals_dir = os.path.join(parent_dir, "vocals")
-        instrumental_dir = os.path.join(parent_dir, "instrumental")
         base_name = os.path.basename(path)
-        vocals_path = os.path.join(vocals_dir, base_name)
-        instrumental_path = os.path.join(instrumental_dir, base_name)
-        # 防止重复处理
-        if not (os.path.exists(vocals_path) and os.path.exists(instrumental_path)):
-            result.append(path)
+        parent_dir = os.path.dirname(path)
+        parent_name = os.path.basename(parent_dir)
+        if parent_name == "vocals" or parent_name == "instrumental":
+            continue
+        vocals_path = os.path.join(parent_dir, "vocals", base_name)
+        instrumental_path = os.path.join(parent_dir, "instrumental", base_name)
+        if os.path.exists(vocals_path) and os.path.exists(instrumental_path):
+            print(f"Skip {path} it has already been processed.")
         else:
-            print(f"Skip {path} it has already been processed .")
+            result.append(path)
     return result
 
 
@@ -92,11 +88,30 @@ def process_track_list(device_id: int,
             mix_original, sr = sf.read(path, dtype='float32')
             if mix_original.ndim == 1:
                 mix_np = np.stack([mix_original, mix_original], axis=-1)
+                is_stereo = False
+            elif mix_original.ndim == 2:
+                channels = mix_original.shape[1]
+                if channels == 1:
+                    mix_mono = mix_original[:, 0]
+                    mix_np = np.stack([mix_mono, mix_mono], axis=-1)
+                    is_stereo = False
+                elif channels == 2:
+                    mix_np = mix_original[:, :2]  # 取两个声道
+                    is_stereo = True
+                else:
+                    mix_np = librosa.to_mono(mix_original.T)    # 先转单声道
+                    mix_np = np.stack([mix_np, mix_np], axis=-1)    # 再转伪立体声
+                    is_stereo = True
             else:
-                mix_np = mix_original  # shape (N, 2)
+                raise ValueError(f"Unsupported audio dimensions: {mix_original.shape}")
             # mixture tensor shape expected: [channels, samples]
             mixture = torch.tensor(mix_np.T, dtype=torch.float32, device=device)
-
+                
+            if hasattr(model, 'stereo'):
+                model.stereo = is_stereo
+            else:
+                raise RuntimeError("Model should have 'stereo' attribute for proper stereo handling.")
+            
             # demix
             with torch.no_grad():
                 if use_amp and device.type == 'cuda':
@@ -107,9 +122,7 @@ def process_track_list(device_id: int,
                 else:
                     res, first_chunk_time = demix_track(config, model, mixture, device, first_chunk_time)
 
-            # 保存输出：按照 clipped 上一级目录创建 vocals/ instrumental/
-            clipped_dir = os.path.dirname(path)
-            parent_dir = os.path.dirname(clipped_dir.rstrip("/"))
+            parent_dir = os.path.dirname(path)
             vocals_dir = os.path.join(parent_dir, "vocals")
             instrumental_dir = os.path.join(parent_dir, "instrumental")
             safe_makedirs(vocals_dir)
@@ -120,7 +133,7 @@ def process_track_list(device_id: int,
             if isinstance(vocals_output, torch.Tensor):
                 vocals_output = vocals_output.cpu().numpy()
 
-            # 转单声道（按原脚本）
+            # 转单声道
             if vocals_output.ndim == 2:
                 vocals_output = vocals_output.mean(axis=1)
 
@@ -128,13 +141,14 @@ def process_track_list(device_id: int,
             vocals_path = os.path.join(vocals_dir, os.path.basename(path))
             sf.write(vocals_path, vocals_output, sr, subtype='PCM_16')
 
-            # 保证 original mix 是单声道用于减法
+            # 保证 original mix 是单声道
             if mix_original.ndim == 2:
                 mix_mono = mix_original.mean(axis=1)
             else:
                 mix_mono = mix_original
-            # vocals_output 可能和 mix_mono 长度相同
-            instrumental = mix_mono - vocals_output
+
+            min_len = min(len(mix_mono), len(vocals_output))
+            instrumental = mix_mono[:min_len] - vocals_output[:min_len]
             instrumental_path = os.path.join(instrumental_dir, os.path.basename(path))
             sf.write(instrumental_path, instrumental, sr, subtype='PCM_16')
 
@@ -176,9 +190,9 @@ if __name__ == "__main__":
     args = parse_args()
 
     # 收集所有 wav
-    all_wavs = find_clipped_wavs(args.root)
+    all_wavs = find_wavs(args.root)
     if len(all_wavs) == 0:
-        print("No .wav files found under clipped. Check your input root.")
+        print("No .wav files found. Check your input root.")
         sys.exit(1)
     print(f"Found {len(all_wavs)} wav files to process.")
 
