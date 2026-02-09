@@ -107,7 +107,8 @@ Please stay tuned.
 ## Recent Updates 🚀
 - 2025/12/18: FunCineForge dataset pipeline toolkit is online! 🔥
 - 2026/01/19: Demo samples and dataset samples released. 🔥
-- 2026/01/25：Fix some environmental and operational issues.
+- 2026/01/25: Fix some environmental and operational issues.
+- 2026/02/09: Optimized the data pipeline and added support for English videos.
 
 <a name="Publication"></a>
 ## Publication 📚
