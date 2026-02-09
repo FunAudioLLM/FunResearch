@@ -13,18 +13,20 @@ from tqdm import tqdm
 import json
 
 # 配置
-MIN_DUP_SUBSTR_LEN = 3
+MIN_DUP_SUBSTR_LEN = 4
 MAX_DUP_SUBSTR_LEN = 10
 DUP_SUBSTR_OCCURS = 5
-DUP_SUBSTR_UNIQUE_THRESHOLD = 1
+DUP_SUBSTR_UNIQUE_THRESHOLD = 2
 ADJ_REPEAT_MIN_RUN = 5
 DEFAULT_MIN_AUDIO_SEC_FOR_TEXT_CHECK = 10
 DEFAULT_MIN_CJK_CHARS = 10
-
+DEFAULT_MIN_ASCII_CHARS = 20
 # 用于识别索引行（可能带 speaker）和时间戳行
 INDEX_RE = re.compile(r'^\s*(\d+)(?:\s+(\S+))?\s*$')
 TIMESTAMP_RE = re.compile(r'^\s*\d{2}:\d{2}:\d{2}[,\.]\d+\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d+\s*$', re.M)
 ASR_FILLERS = re.compile(r'\b(uh|um|mm|hmm|<unk>|\[noise\]|\[laughter\]|\[inaudible\])\b', re.I)
+ASSOCIATED_EXTS = ['.wav', '.mp4', '.srt']
+EXTRA_DIRS = ['instrumental', 'vocals']
 
 def is_cjk(char):
     code = ord(char)
@@ -172,7 +174,13 @@ def trim_srt_keep_last_three_nonempty_lines(text: str) -> str:
     return "\n".join(last_three) + ("\n" if last_three else "")
 
 
-def process_one_srt(srt_path, min_audio_sec_for_text_check=DEFAULT_MIN_AUDIO_SEC_FOR_TEXT_CHECK, min_cjk_chars=DEFAULT_MIN_CJK_CHARS):
+def process_one_srt(
+    srt_path, 
+    lang, 
+    min_audio_sec_for_text_check=DEFAULT_MIN_AUDIO_SEC_FOR_TEXT_CHECK, 
+    min_cjk_chars=DEFAULT_MIN_CJK_CHARS, 
+    min_ascii_chars=DEFAULT_MIN_ASCII_CHARS
+):
     out = {
         'srt_path': srt_path,
         'wav_duration': 0,
@@ -183,7 +191,8 @@ def process_one_srt(srt_path, min_audio_sec_for_text_check=DEFAULT_MIN_AUDIO_SEC
         'adj_repeat_count': 0,
         'adj_repeat_examples': '',
         'flags': [],
-        'lines_correct': False
+        'lines_correct': False,
+        'lang': lang
     }
     try:
         # 读原始并清洗，提取 speaker 列表
@@ -207,9 +216,14 @@ def process_one_srt(srt_path, min_audio_sec_for_text_check=DEFAULT_MIN_AUDIO_SEC
         out['cjk_count'] = ct['cjk']
         out['ascii_count'] = ct['ascii']
 
-        # 只要出现任意英文字符即判定
-        if out['ascii_count'] >= 1:
-            out['flags'].append('language_mismatch')
+        if lang == 'zh':
+            # 中文模式：存在英文字符
+            if out['ascii_count'] > 5:
+                out['flags'].append('language_mismatch')
+        elif lang == 'en':
+            # 英文模式：存在中文字符
+            if out['cjk_count'] > 5:
+                out['flags'].append('language_mismatch')
 
         # 重复子串检测
         dup_subs = find_repeated_substrings(cleaned)
@@ -235,8 +249,11 @@ def process_one_srt(srt_path, min_audio_sec_for_text_check=DEFAULT_MIN_AUDIO_SEC
         # 文本过少 vs 音频过长
         dur = out['wav_duration']
         if dur != 0:
-            if dur >= min_audio_sec_for_text_check and out['cjk_count'] <= min_cjk_chars:
-                out['flags'].append('too_short_text_for_audio')
+            if dur >= min_audio_sec_for_text_check:
+                if lang == 'zh' and out['cjk_count'] <= min_cjk_chars:
+                    out['flags'].append('too_short_text_for_audio')
+                elif lang == 'en' and out['ascii_count'] <= min_ascii_chars:
+                    out['flags'].append('too_short_text_for_audio')
         else:
             print(f"[ERROR] {wav_candidate} 音频出错")
 
@@ -271,7 +288,27 @@ def count_srt_quick(root_dir):
             continue
     return total
 
-def main(root_dir, workers, max_outstanding, min_audio_sec_for_text_check, min_cjk_chars, execute, delete_log):
+def find_case_insensitive_file(dirpath, target_name):
+    try:
+        for entry in os.listdir(dirpath):
+            if entry.lower() == target_name.lower():
+                return os.path.join(dirpath, entry)
+    except Exception:
+        return None
+    return None
+
+def remove_file(path, execute):
+    if not path:
+        return False, "not_found"
+    if not execute:
+        return True, "dry_run"  # 表示将删除但未实际删除
+    try:
+        os.remove(path)
+        return True, "deleted"
+    except Exception as e:
+        return False, f"err:{e}"
+
+def main(root_dir, workers, max_outstanding, lang, min_audio_sec_for_text_check, min_cjk_chars, min_ascii_chars, execute, delete_log):
     total = count_srt_quick(root_dir)
     
     # 初始化统计计数器
@@ -283,6 +320,7 @@ def main(root_dir, workers, max_outstanding, min_audio_sec_for_text_check, min_c
         'adjacent_repeats': 0,
         'too_short_text_for_audio': 0,
         'total_cjk': 0,
+        'total_ascii': 0,
         'lines_correct': 0,
         'too_few_lines': 0,
         'total_audio_duration': 0.0,
@@ -299,7 +337,7 @@ def main(root_dir, workers, max_outstanding, min_audio_sec_for_text_check, min_c
                 p = next(srt_iter)
             except StopIteration:
                 break
-            futures[ex.submit(process_one_srt, p, min_audio_sec_for_text_check, min_cjk_chars)] = p
+            futures[ex.submit(process_one_srt, p, lang, min_audio_sec_for_text_check, min_cjk_chars, min_ascii_chars)] = p
 
         while futures:
             done_iter = as_completed(futures)
@@ -308,23 +346,39 @@ def main(root_dir, workers, max_outstanding, min_audio_sec_for_text_check, min_c
             try:
                 r = done_fut.result()
                 flags = r.get('flags', [])
+                # 累加字符统计
+                stats['total_cjk'] += r.get('cjk_count', 0)
+                stats['total_ascii'] += r.get('ascii_count', 0)
+                if r.get('wav_duration'):
+                    stats['total_audio_duration'] += r.get('wav_duration')
+                # 问题文件统计与删除逻辑
                 if flags:
                     stats['with_errors'] += 1
-                    # 删除逻辑
-                    base_path = os.path.splitext(r['srt_path'])[0]
-                    for ext in ['.srt', '.wav', '.mp4']:
-                        file_path = base_path + ext
-                        if os.path.exists(file_path):
-                            if execute:
-                                try:
-                                    os.remove(file_path)
-                                    delf.write(json.dumps(r, ensure_ascii=False) + '\n')
-                                except Exception as e:
-                                    print(f"[删除失败] {file_path}: {e}")
-                            else:
-                                delf.write(json.dumps(r, ensure_ascii=False) + '\n')
+                    dirpath = os.path.dirname(r['srt_path'])
+                    basename = os.path.splitext(os.path.basename(r['srt_path']))[0]
+                    all_success = True
+                    # 删除 clipped 关联文件
+                    for ext in ASSOCIATED_EXTS:
+                        target = basename + ext
+                        found = find_case_insensitive_file(dirpath, target)
+                        success, reason = remove_file(found, execute)
+                        if found and not success:
+                            all_success = False
+                            print(f"[ERROR] {found}: {reason}")
+                    parent_dir = os.path.dirname(dirpath)
+                    # 删除extra_dirs中的关联文件
+                    for extra_dir_name in EXTRA_DIRS:
+                        extra_dir = os.path.join(parent_dir, extra_dir_name)
+                        if os.path.isdir(extra_dir):
+                            target_wav = basename + '.wav'
+                            found_extra = find_case_insensitive_file(extra_dir, target_wav)
+                            success, reason = remove_file(found_extra, execute)
+                            if found_extra and not success:
+                                all_success = False
+                                print(f"[ERROR] {found_extra}: {reason}")
+                    if all_success:
+                        delf.write(json.dumps(r, ensure_ascii=False) + '\n')
                 
-
                 if r.get('lines_correct'):
                     stats['lines_correct'] += 1
                 if 'too_few_lines' in flags:
@@ -337,12 +391,6 @@ def main(root_dir, workers, max_outstanding, min_audio_sec_for_text_check, min_c
                     stats['adjacent_repeats'] += 1
                 if 'too_short_text_for_audio' in flags:
                     stats['too_short_text_for_audio'] += 1
-                
-                # 累计字符和时长
-                stats['total_cjk'] += r.get('cjk_count', 0)
-                if r.get('wav_duration') is not None:
-                    stats['total_audio_duration'] += r.get('wav_duration')
-                
                 
             except Exception as e:
                 tb = traceback.format_exc()
@@ -366,11 +414,18 @@ def main(root_dir, workers, max_outstanding, min_audio_sec_for_text_check, min_c
     print(f"相邻重复问题: {stats['adjacent_repeats']} ({stats['adjacent_repeats']/stats['total_files']*100:.1f}%)")
     print(f"文本过少: {stats['too_short_text_for_audio']} ({stats['too_short_text_for_audio']/stats['total_files']*100:.1f}%)")
     if stats['total_files'] > 0:
-        avg_cjk = stats['total_cjk'] / stats['total_files']
-        print(f"平均中文字符/文件: {avg_cjk:.1f}")
+        if lang == 'zh':
+            avg_cjk = stats['total_cjk'] / stats['total_files']
+            print(f"平均中文字符/文件: {avg_cjk:.1f}")
+        elif lang == 'en':
+            avg_ascii = stats['total_ascii'] / stats['total_files']
+            print(f"平均ASCII字母/文件: {avg_ascii:.1f}")
         if stats['total_audio_duration'] > 0:
             hours = stats['total_audio_duration'] / 3600
             print(f"总音频时长: {hours:.2f} 小时")
+    if not execute:
+        print("\n[INFO] 当前为 dry-run 模式，文件未实际删除。使用 --execute 参数执行真实删除。")
+
 
 
 if __name__ == '__main__':
@@ -378,11 +433,14 @@ if __name__ == '__main__':
     ap.add_argument("--root", type=str, nargs='?',
                     default="/nfs/yanzhang.ljx/workspace/datasets/YingShi/clean/zh",
                     help="根目录（递归查找名为 clipped 的文件夹）")
+    ap.add_argument("--lang", type=str, default='zh', choices=['zh', 'en'],
+                    help="SRT语言类型: zh=中文, en=英文（影响语言匹配和文本长度检查）")
     ap.add_argument("--workers", type=int, default=max(4, (os.cpu_count() or 1) * 4), help="线程数（默认 CPU*4）")
     ap.add_argument("--max_outstanding", type=int, default=max(16, (os.cpu_count() or 1) * 8), help="futures 数量")
     ap.add_argument("--min_audio_sec", type=float, default=DEFAULT_MIN_AUDIO_SEC_FOR_TEXT_CHECK, help="音频足够长以触发文本过少检查的阈值（秒）")
-    ap.add_argument("--min_cjk_chars", type=int, default=DEFAULT_MIN_CJK_CHARS, help="文本过少检查的中文字符阈值（<=此数视为过少）")
+    ap.add_argument("--min_cjk_chars", type=int, default=DEFAULT_MIN_CJK_CHARS, help="中文模式下文本过少检查的CJK字符阈值")
+    ap.add_argument("--min_ascii_chars", type=int, default=DEFAULT_MIN_ASCII_CHARS, help="英文模式下文本过少检查的ASCII字母阈值")
     ap.add_argument("--execute", action="store_true", help="真正执行删除，默认仅 dry-run，不会实际删除")
     ap.add_argument("--delete_log", default="delete_srt.log", help="记录已被删除的文件")
     args = ap.parse_args()
-    main(args.root, args.workers, args.max_outstanding, args.min_audio_sec, args.min_cjk_chars, args.execute, args.delete_log)
+    main(args.root, args.workers, args.max_outstanding, args.lang, args.min_audio_sec, args.min_cjk_chars, args.min_ascii_chars, args.execute, args.delete_log)

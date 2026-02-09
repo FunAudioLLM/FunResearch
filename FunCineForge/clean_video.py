@@ -13,8 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import soundfile as sf
 from tqdm import tqdm
 
-# 需要删除的关联扩展（小写）
 ASSOCIATED_EXTS = ['.wav', '.mp4', '.srt']
+EXTRA_DIRS = ['instrumental', 'vocals']
 
 def iter_clipped_dirs(root_dir):
     for dirpath, _, _ in os.walk(root_dir):
@@ -95,14 +95,23 @@ def process_and_maybe_delete(path, min_sec, max_sec, execute):
         # 删除条件： duration < min_sec OR duration > max_sec
         if duration < min_sec or duration > max_sec:
             res['to_delete'] = True
-            # 删除同名文件（大小写不敏感匹配）
             dirpath = os.path.dirname(path)
             basename = os.path.splitext(os.path.basename(path))[0]
+            # 删除 clipped 目录下关联文件（.wav, .mp4, .srt）
             for ext in ASSOCIATED_EXTS:
                 target = basename + ext
                 found = find_case_insensitive_file(dirpath, target)
                 success, reason = remove_file(found, execute)
                 res['deleted'][ext] = (found, success, reason)
+            # 删除同级 instrumental/vocals 目录下同名 .wav
+            parent_dir = os.path.dirname(dirpath)  # clipped 的父目录
+            for extra_dir_name in EXTRA_DIRS:
+                extra_dir = os.path.join(parent_dir, extra_dir_name)
+                if os.path.isdir(extra_dir):
+                    target_wav = basename + '.wav'
+                    found_extra = find_case_insensitive_file(extra_dir, target_wav)
+                    success, reason = remove_file(found_extra, execute)
+                    res['deleted'][extra_dir_name] = (found_extra, success, reason)
     except Exception as e:
         res['error'] = str(e)
         res['traceback'] = traceback.format_exc()
@@ -114,7 +123,7 @@ def main(root_dir, min_sec, max_sec, workers, max_outstanding, execute, log_path
         print("未找到任何 wav 文件（在名为 'clipped' 的目录中）。")
         return
 
-    deleted_summary = {ext: 0 for ext in ASSOCIATED_EXTS}
+    deleted_summary = {ext: 0 for ext in (ASSOCIATED_EXTS + EXTRA_DIRS)}
     will_delete_count = 0
     processed = 0
 
@@ -148,7 +157,7 @@ def main(root_dir, min_sec, max_sec, workers, max_outstanding, execute, log_path
                         if success and reason in ('deleted', 'dry_run'):
                             deleted_summary[ext] += 1
                         # 写日志：删除或将删除
-                        logf.write(f"{r['wav']}\t{r['duration']}\t{ext}\t{found}\t{success}\t{reason}\n")
+                        logf.write(f"{found}\t{r['duration']}\t{success}\t{reason}\n")
                     logf.flush()
                 # 如果出错则写失败日志
                 if 'error' in r:
@@ -172,7 +181,7 @@ def main(root_dir, min_sec, max_sec, workers, max_outstanding, execute, log_path
     print(f"符合删除条件的 wav 数量: {will_delete_count}")
     print("各扩展被删除（或将被删除）计数：")
     for ext, cnt in deleted_summary.items():
-        print(f"  {ext}: {cnt}")
+        print(f"    {ext}: {cnt}")
     if not execute:
         print("当前为 DRY-RUN 模式（未实际删除）。要执行删除请加参数 --execute")
 

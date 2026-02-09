@@ -73,8 +73,8 @@ bash run.sh --stage 1 --stop_stage 2 --input datasets/raw_zh --output datasets/c
 
 - 视频时长限制及清理检查。（若不使用--execute参数，则仅打印已预删除的文件。检查后，若需确认删除，请添加--execute参数。）
 ```shell
-python clean_video.py --root datasets/clean/zh --execute
-python clean_srt.py --root datasets/clean/zh --execute
+python clean_video.py --root datasets/clean/zh --lang zh
+python clean_srt.py --root datasets/clean/zh --lang zh
 ```
 
 - [4] [Speaker Diarization](./speaker_diarization/README.md). 多模态主动说话人识别，得到 RTTM 文件；识别说话人的面部帧，提取帧级的说话人面部和唇部原始数据，从面部帧中识别说话帧，提取说话帧的面部特征。
