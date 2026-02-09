@@ -41,10 +41,12 @@ def trim_video_and_extract_audio(input_path, output_video_path, output_audio_pat
 
             video_cmd = [
                 "ffmpeg", "-y",
+                "-i", input_path,
                 "-ss", str(start),
                 "-to", str(end),
-                "-i", input_path,
-                "-c", "copy",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-c:a", "aac",
                 output_video_path
             ]
             subprocess.run(video_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)

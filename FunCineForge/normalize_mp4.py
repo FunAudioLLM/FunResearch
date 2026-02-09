@@ -11,7 +11,7 @@ from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import argparse
 
-VIDEO_EXTENSIONS = ['.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm']
+VIDEO_EXTENSIONS = ['.mkv', '.avi', '.mov', '.flv', '.wmv', '.rmvb', '.webm']
 
 def normalize_filename(filename: str) -> str:
     name, ext = os.path.splitext(filename)
