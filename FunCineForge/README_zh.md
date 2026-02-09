@@ -53,39 +53,45 @@ python setup.py
 
 ### 使用方法
 
-- 规范视频格式为 mp4，libx264 & libmp3lame 编码；裁剪影视剧片头片尾（默认片头片尾各裁剪5分钟）
+- [1] 将视频格式标准化为mp4；裁剪长视频的开头和结尾。（默认是从每部分裁剪5秒。）
 ```shell
 python normalize_mp4.py --root datasets/raw_zh
 python trim_video.py --root datasets/raw_zh
 ```
-- [Video Clip](./video_clip/README.md). 对长序列视频 VAD，得到句子级的片段，通过 ASR 得到转录文本，生成字幕文件。再将长序列视频剪裁为片段。
-```shell
-cd video_clip
-bash run.sh --stage 1 --stop_stage 2 --input datasets/raw_zh --output datasets/clean/zh --lang zh --device cpu
-```
-- 视频时长限制和字幕文件清洗。(不加 --execute 只会打印预删除文件，检查无误后添加 --execute 运行确认删除)
-```shell
-python clean_video.py --root datasets/clean/zh --execute
-python clean_srt.py --root datasets/clean/zh --execute
-```
-- [Speech Separation](./speech_separation/README.md). 音频进行人声乐声分离。
+
+- [2] [Speech Separation](./speech_separation/README.md). 音频进行人声乐声分离。
 ```shell
 cd speech_separation
 python run.py --root datasets/clean/zh --gpus 0 1 2 3
 ```
-- [Speaker Diarization](./speaker_diarization/README.md). 多模态主动说话人识别，得到 RTTM 文件；识别说话人的面部帧，提取帧级的说话人面部和唇部原始数据，从面部帧中识别说话帧，提取说话帧的面部特征。
+
+- [3] [VideoClipper](./video_clip/README.md). 对于长视频，使用 VideoClipper 获取句子级别的字幕文件，并根据时间戳将长视频剪辑成片段。现在它支持中英双语。以下是中文示例.
+```shell
+cd video_clip
+bash run.sh --stage 1 --stop_stage 2 --input datasets/raw_zh --output datasets/clean/zh --lang zh --device cpu
+```
+
+- 视频时长限制及清理检查。（若不使用--execute参数，则仅打印已预删除的文件。检查后，若需确认删除，请添加--execute参数。）
+```shell
+python clean_video.py --root datasets/clean/zh --execute
+python clean_srt.py --root datasets/clean/zh --execute
+```
+
+- [4] [Speaker Diarization](./speaker_diarization/README.md). 多模态主动说话人识别，得到 RTTM 文件；识别说话人的面部帧，提取帧级的说话人面部和唇部原始数据，从面部帧中识别说话帧，提取说话帧的面部特征。
 ```shell
 cd speaker_diarization
 bash run.sh --stage 1 --stop_stage 4 --hf_access_token hf_xxx --root datasets/clean/zh --gpus "0 1 2 3"
 ```
-- （参考）基于 CosyVoice3 tokenizer 提取 speech tokens 用于大模型训练。
-```shell
-python speech_tokenizer.py --root datasets/clean/zh
-```
-- 多模态思维链校正。该系统基于通用多模态大模型，以音频、ASR 抄本和 RTTM 文件为输入，利用思维链推理来提取线索，并校正专用模型的结果，并标注人物年龄、性别和音色。实验结果表明，该策略将词错率从4.53% 降低到 0.94%，说话人识别错误率从 8.38% 降低到 1.20%，其质量可与人工转录相媲美，甚至更优。添加--resume选项可启用断点思维链推理，以避免重复思维链推理造成的资源浪费。
+
+- [5] 多模态思维链校正。该系统基于通用多模态大模型，以音频、ASR 抄本和 RTTM 文件为输入，利用思维链推理来提取线索，并校正专用模型的结果，并标注人物年龄、性别和音色。实验结果表明，该策略将词错率从4.53% 降低到 0.94%，说话人识别错误率从 8.38% 降低到 1.20%，其质量可与人工转录相媲美，甚至更优。添加--resume选项可启用断点思维链推理，以避免重复思维链推理造成的资源浪费。
 ```shell
 python cot.py --root_dir datasets/clean/zh --provider google --model gemini-2.5-flash --api_key xxx --resume
 python build_datasets.py --root_dir datasets/clean/zh --out_dir datasets/clean --save
+```
+
+- （参考）基于 CosyVoice3 tokenizer 提取 speech tokens 用于大模型训练。
+```shell
+python speech_tokenizer.py --root datasets/clean/zh
 ```
 
 <a name="Dubbing-Model"></a>
@@ -97,6 +103,7 @@ python build_datasets.py --root_dir datasets/clean/zh --out_dir datasets/clean -
 - 2025/12/18：FunCineForge 数据集管道工具包上线！🔥
 - 2026/01/19：发布演示样例和数据集样例。 🔥
 - 2026/01/25：修复了一些环境和运行问题。
+- 2026/02/09：优化了数据管道，新增支持英文视频的能力。
 
 <a name="发表"></a>
 ## 发表 📚
