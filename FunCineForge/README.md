@@ -27,7 +27,7 @@ in Diverse Cinematic Scenes</b>
 
 <a name="Dataset&Demo"></a>
 ## Dataset & Demo 🎬
-You can access this [Website](https://anonymous.4open.science/w/FunCineForge/) to get our CineDub-CN dataset samples and demo samples. 
+You can access [https://funcineforge.github.io/](https://funcineforge.github.io/) to get our CineDub-CN dataset samples and demo samples. 
 
 
 <a name="Dataset-Pipeline"></a>
