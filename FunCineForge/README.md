@@ -56,10 +56,9 @@ we recommend that you refer to the following requirements to collect the corresp
 
 ### How to use
 
-- [1] Standardize the video format to mp4; crop the beginning and end of long videos. (default is to trim 5 seconds from each part.)
+- [1] Standardize video format and name; trim the beginning and end of long videos; extract the audio from the trimmed video. (default is to trim 10 seconds from both the beginning and end.)
 ```shell
-python normalize_mp4.py --root datasets/raw_zh
-python trim_video.py --root datasets/raw_zh
+python normalize_trim.py --root datasets/raw_zh --intro 10 --outro 10
 ```
 
 - [2] [Speech Separation](./speech_separation/README.md). The audio is used to separate the vocals from the instrumental music.
@@ -68,7 +67,7 @@ cd speech_separation
 python run.py --root datasets/clean/zh --gpus 0 1 2 3
 ```
 
-- [3] [VideoClipper](./video_clip/README.md). For long videos, VideoClipper is used to obtain sentence-level subtitle files and clip the long video into segments based on timestamps. Now it supports bilingualism in both Chinese and English. Below is an example in Chinese.
+- [3] [VideoClipper](./video_clip/README.md). For long videos, VideoClipper is used to obtain sentence-level subtitle files and clip the long video into segments based on timestamps. Now it supports bilingualism in both Chinese and English. Below is an example in Chinese. It is recommended to use gpu acceleration for English.
 ```shell
 cd video_clip
 bash run.sh --stage 1 --stop_stage 2 --input datasets/raw_zh --output datasets/clean/zh --lang zh --device cpu
