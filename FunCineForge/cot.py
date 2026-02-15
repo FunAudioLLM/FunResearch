@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-用音视频大模型做 audio / video CoT分析。
-我们依赖: requests url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-    本工具推荐并采用 gemini-2.5-flash model， 可自行更换其他多模态大模型
-    python cot.py --root_dir datasets/clean/zh --provider google --model gemini-2.5-flash --api_key xxx --resume
-可更换url依赖，参考https://ai.google.dev/gemini-api/docs/structured-output，需修改call_dashscope_api
+用音视频通用 caption 大模型做 audio / video CoT分析和矫正。
+我们依赖接口: requests url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    本工具推荐并采用 gemini-3-pro-preview model， 可自行更换其他多模态理解大模型如 Qwen 3.5， gemini 3 flash
+    python cot.py --root_dir datasets/clean/zh --lang zh --provider google --model gemini-3-pro-preview --api_key xxx --resume
+可更换 url 依赖，你可自行参考 https://ai.google.dev/gemini-api/docs/structured-output ，并修改 call_dashscope_api 代码
 from google import genai
 client = genai.Client()
 response = client.models.generate_content(
-    model="gemini-2.5-flash",
+    model="gemini-3-pro-preview",
     contents=messages,
     config=types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_budget=2048)),
+        thinking_config=types.ThinkingConfig(thinking_budget=1024)),
 )
 """
 
@@ -23,26 +23,51 @@ import re
 import argparse
 from typing import List, Dict, Any, Tuple
 import traceback
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
+from requests.exceptions import Timeout, ConnectionError, HTTPError
 import time
 import gc
 
 # ------------------------------
 # 构造 Prompt（音频 / 视频）
 # ------------------------------
-AUDIO_PROMPT_TEMPLATE = """
-你是一个专注于音频分析的专家，分析的对象是给定的wav音频，辅助信息有ASR转录文本，RTTM中提取的时间戳和对应的说话人。
-注意ASR转录文本存在词汇错误和标点断句错误的情况，RTTM中的speaker id可能少标或多标,请根据实际音色区分id，但正确的id需要和RTTM中的说话人id匹配。
-任务：判断有几个说话人，判断每个说话人的年龄性别和音色，
-准确识别语音并基于提供的ASR转录文本，文本纠错后得到正确的文本和合理的标点。
+AUDIO_PROMPT_TEMPLATE_zh = """
+你是一个专注于中文音频分析和纠错的专家，任务是使用辅助信息分析给定的 wav 音频文件，辅助信息有 ASR 转录文本，和从RTTM中提取的带有说话人 id（1，2，3 等）的时间戳。
+注意 ASR 转录文本会存在词汇错误和标点断句错误的情况，说话人 id 可能少标或多标,请你根据语音中实际的说话人音色区分说话人 id，纠正后的 id 需要和 RTTM 中的说话人 id 匹配。
+任务：
+需要判断音频中有几个说话人，分析每个说话人的年龄段、性别和音色属性，
+准确识别语音内容，并认真参考提供的 ASR 转录文本，对ASR转录文本进行纠错，给出正确的文本和合理的标点。
 根据语音内容和RTTM辅助信息，理解音频的各个时间段是哪个说话人在说话，
-然后思考并总结音频的整体情感线索和每个说话人的韵律情感变化，总结每个说话人的信息和情感线索并保存在clue中，线索用中文陈述，不用描述背景音效，线索限制在85字以内。
+然后思考并总结音频的整体情感线索和每个说话人的语调情感，总结每个说话人的属性信息和情感线索并保存在 clue 中，线索用中文陈述，不描述背景音效，线索限制在90字以内。
 输出：
-严格按照下面的格式输出，无其他任何额外输出。
-label为<中性、不确定、喜悦、信任、害怕、惊讶、难过、厌恶、生气、期待、紧张>中一种，confidence 为label的置信度，text为纠正的转录文本，
-id 匹配RTTM中说话人1,2,3...，age为<儿童，青年，中年，中老年，老年，不确定>中一种，gender为<男，女，不确定>中一种，timbre为几个描述音色的词汇。
-<answer>{"label": "中性", "confidence": 0.8, "text": "哎呀，将军，将军，不可连累老夫啊！大丈夫生居天地之间，岂能郁郁久居人下！", "speakers": [{"id": "1", "age": "中年", "gender": "男", "timbre": "低沉、苍老"},{"id": "2", "age": "青年", "gender": "男", "timbre": "高亢、有力、果断"},...], "clue": "两名角色对话，第一位中年男性角色情绪紧张，略带颤抖和哀求，表达对被牵连的恐惧。第二位角色语调变得激昂坚定，铿锵有力，充满对尊严和自由的强烈渴望。整体展现出从畏惧到反抗的情感转变。"}</answer>
+label 为<中性、喜悦、信任、害怕、惊讶、难过、厌恶、生气、期待、紧张、不确定>中一种，confidence 为label的置信度，text 为纠正后的转录文本，
+id 匹配RTTM中说话人 1，2，3...，age 为<儿童，青年，中年，中老年，老年，不确定>中一种，gender 为<男，女，不确定>中一种，timbre 为两三个描述音色的词汇。
+必须严格按照下面的字典模板格式输出，无其他任何额外输出。具体内容仅供参考，根据提供的 ASR 文本，时间戳说话人和语音信息给出。
+<answer>{"label": "中性", "confidence": 0.8, "text": "哎呀，将军，将军，不可连累老夫啊！大丈夫生居天地之间，岂能郁郁久居人下！", "speakers": [{"id": "1", "age": "中年", "gender": "男", "timbre": "低沉、苍老"}, {"id": "2", "age": "青年", "gender": "男", "timbre": "高亢、有力、果断"}, ...], "clue": "两名角色对话，第一位中年男性角色情绪紧张，语气略带颤抖和哀求，表达对被牵连的恐惧。第二位角色语调变得激昂坚定，铿锵有力，充满对尊严和自由的强烈渴望。整体展现出从畏惧到反抗的情感转变。"}</answer>
+"""
+
+AUDIO_PROMPT_TEMPLATE_en = """
+You are an expert specializing in English audio analysis and error correction. Your task is to analyze a given WAV audio file using auxiliary information: an ASR transcript and RTTM-extracted timestamps with speaker IDs (1, 2, 3, etc.).
+Note: The ASR transcript may contain word errors and punctuation mistakes. Speaker IDs might be mislabeled (too many or too few). You must distinguish speaker IDs based on the actual vocal timbre in the audio and ensure corrected IDs match the RTTM IDs.
+Tasks:
+1. Determine the number of speakers in the audio.
+2. Analyze each speaker's age group, gender, and timbre attributes.
+3. Accurately identify the speech content. Refer to the provided ASR transcript to correct errors, providing the correct text and natural English punctuation.
+4. Based on the audio content and RTTM info, determine which speaker is speaking in each time interval of the audio.
+5. Analyze the overall emotion and each speaker's attributes, tone and emotion. Summarize the speakers' attributes and emotional clues in the "clue" field.
+The "clue" must be in English, exclude background sound descriptions, and be under 150 words.
+Output Requirements:
+1. text: Corrected transcription with proper English punctuation.
+2. label: Choose from <neutral, happy, trust, fear, surprise, sadness, disgust, anger, anticipation, tension, uncertain>. Confidence score for the label (0.0 to 1.0).
+3. speakers: A list of objects containing:
+id: The output speaker_id must be consistent with the original RTTM ID numbering system, but the allocation logic is based on the audio content;
+age: <child, teenager, adult, middle-aged, elderly, uncertain>; 
+gender: <male, female, uncertain>; 
+timbre: 2-3 descriptive adjectives (e.g., deep, gentle, magnetic, doubtful).
+clue: A summary description of each speaker's attributes, emotions, and tone.
+You must strictly follow the dictionary template below to output the results. Only output the result in the style shown below, without any other additional output.
+<answer>{"label": "Surprise", "confidence": 0.8, "text": "Oh, that is absolutely wonderful news! I can't believe we actually won the championship!", "speakers": [{"id": "1", "age": "teenager", "gender": "male", "timbre": "bright, energetic"}, {"id": "2", "age": "middle-aged", "gender": "female", "timbre": "warm, resonant"}, ...], "clue": "A dialogue between two speakers. The first young male speaker expresses intense excitement and disbelief about a victory. The second middle-aged female speaker responds with a warm, supportive tone. The overall atmosphere is celebratory and uplifting."}</answer>
 """
 
 VIDEO_PROMPT_TEMPLATE = """
@@ -53,9 +78,9 @@ VIDEO_PROMPT_TEMPLATE = """
 # 辅助函数
 # ------------------------------
 # 价格（美元 / 每百万 token）
-_PRICE_TEXT_PER_M = 0.4 / 1_000_000
-_PRICE_AUDIO_PER_M = 0.7 / 1_000_000
-_PRICE_OUTPUT_PER_M = 0.4 / 1_000_000
+_PRICE_TEXT_PER_M = 0.5 / 1_000_000
+_PRICE_AUDIO_PER_M = 0.5 / 1_000_000
+_PRICE_OUTPUT_PER_M = 1.0 / 1_000_000
 
 def calculate_cost_from_usage(usage: Dict[str, Any]) -> Tuple[int, float]:
     """
@@ -66,7 +91,7 @@ def calculate_cost_from_usage(usage: Dict[str, Any]) -> Tuple[int, float]:
     text_tokens = int(prompt_details.get('text_tokens', 0) or 0)
 
     completion_tokens = int(usage.get('completion_tokens', 0) or 0)
-    think_tokens = int(usage.get('think_tokens', 0) or 0)
+    think_tokens = int(usage.get('reasoning_tokens', 0) or 0)
     if completion_tokens == 0:
         completion_tokens = int((usage.get('completion_tokens_details', {}) or {}).get('text_tokens', 0) or 0)
 
@@ -153,35 +178,55 @@ def parse_rttm(rttm_path: str) -> List[Dict]:
             break
     return segments
 
+
 def call_dashscope_api(api_key: str, provider: str, model_name: str, messages: List[Dict],
-                       thinking_budget: int = 2048, min_tokens: int = 1024, timeout: int = 120) -> Dict:
+                       thinking_budget: int = 1024, max_tokens: int = 16000, timeout: int = 200, max_retries: int = 5) -> Dict:
     """
-    调用 DashScope API，失败时自动重试一次
+    调用 DashScope API，失败时自动重试
     """
     url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": api_key}
-
-    last_err = None
-    for attempt in range(5):
-        try:
-            if attempt == 4:
-                thinking_budget = 1024
-            payload = {
-                "model": model_name,
-                "messages": messages,
-                "max_tokens": min_tokens * (6 - attempt),
-                "thinking": {"type": "enabled", "budget_tokens": thinking_budget},
-                "dashscope_extend_params": {"provider": provider}
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            "thinkingConfig": {
+                "includeThoughts": "true",
+                "thinkingBudget": thinking_budget
             }
+        },
+        "thinking": {"type": "enabled", "budget_tokens": thinking_budget},
+        "dashscope_extend_params": {"provider": provider}
+    }
+    for attempt in range(max_retries):
+        try:
             resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=timeout)
+            if resp.status_code in [429, 500, 502, 503, 504]:
+                retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
+                wait = max(retry_after, 0.5 * (2 ** attempt))  # 指数退避
+                time.sleep(wait)
+                continue
             resp.raise_for_status()
+            time.sleep(0.3) # 避免连续请求触发限流
             return resp.json()
-        except requests.exceptions.RequestException as e:
-            last_err = e
-            if attempt < 4:
-                time.sleep(1)  # 重试前等 1 秒
-            else:
-                raise last_err
+        except (Timeout, ConnectionError) as e:
+            # 网络层超时/连接错误
+            wait = 0.5 * (2 ** attempt)
+            if attempt < max_retries - 1:
+                time.sleep(wait)
+                continue
+            raise Exception(f"Max retries ({max_retries}) exceeded for network error: {e}")
+        except HTTPError as e:
+            if e.response.status_code in [429, 500, 502, 503, 504] and attempt < max_retries - 1:
+                retry_after = int(e.response.headers.get("Retry-After", 0))
+                wait = max(retry_after, 0.5 * (2 ** attempt))
+                time.sleep(wait)
+                continue
+            raise Exception(f"Non-retryable HTTP error {e.response.status_code}: {e.response.text}")
+    raise Exception(f"Max retries ({max_retries}) exceeded for API call")
+
 
 def format_segments_for_prompt(segments: List[Dict]) -> str:
     """
@@ -204,25 +249,38 @@ def format_segments_for_prompt(segments: List[Dict]) -> str:
 # ------------------------------
 # 模型调用函数：audio/video 分别调用
 # ------------------------------
-def analyze_audio_worker(audio_data_url: str, asr_text: str, segments: List[Dict], 
+def analyze_audio_worker(lang: str, audio_data_url: str, asr_text: str, segments: List[Dict], 
                          api_key: str, provider: str, model_name: str,
                           thinking_budget: int) -> Tuple[Dict, int, float]:
     segment_prompt = format_segments_for_prompt(segments)
-    messages = [{"role": "user", "content": [
-                            {"text": AUDIO_PROMPT_TEMPLATE, "type": "text"},
-                            {"text": asr_text, "type": "text"},
-                            {"text": segment_prompt, "type": "text"},
-                            {"audio_url": {"url": audio_data_url}, "type": "audio_url"}]
-                }]
+    if lang == 'zh':
+        messages = [{"role": "user", "content": [
+                                {"text": AUDIO_PROMPT_TEMPLATE_zh, "type": "text"},
+                                {"text": asr_text, "type": "text"},
+                                {"text": segment_prompt, "type": "text"},
+                                {"audio_url": {"url": audio_data_url}, "type": "audio_url"}]
+                    }]
+    elif lang == 'en':
+        messages = [{"role": "user", "content": [
+                                {"text": AUDIO_PROMPT_TEMPLATE_en, "type": "text"},
+                                {"text": asr_text, "type": "text"},
+                                {"text": segment_prompt, "type": "text"},
+                                {"audio_url": {"url": audio_data_url}, "type": "audio_url"}]
+                    }]
     resp_json = call_dashscope_api(api_key, provider, model_name, messages, thinking_budget=thinking_budget)
     # 安全检查并解析
     content_string = resp_json['choices'][0]['message']['content']
+    answer_match = re.search(r"<answer>(.*?)</answer>", content_string, re.S)
     usage = resp_json.get('usage', {})
     tokens, cost = calculate_cost_from_usage(usage)
-    answer_match = re.search(r"<answer>(.*?)</answer>", content_string, re.S)
+    finish_reason = resp_json['choices'][0]['finish_reason']
+    if finish_reason == "length":
+        print(f"[WARNING] 回复提前截断。{content_string}")
+        answer_json = None
+        return answer_json, tokens, cost
     if not answer_match:
-        print("[WARNING] 未找到 <answer> 标签，响应内容不符合预期。")
-        answer_json = {}
+        print(f"[WARNING] 未找到 <answer> 标签，响应内容不符合预期。{content_string}")
+        answer_json = None
         return answer_json, tokens, cost
     answer_text = answer_match.group(1).strip()
     answer_json = json.loads(answer_text)
@@ -235,22 +293,33 @@ def analyze_video_worker(video_data_url: str, asr_text: str, segments: List[Dict
     segment_prompt = format_segments_for_prompt(segments)
     messages = [{"role": "user", "content": [
                             {"text": VIDEO_PROMPT_TEMPLATE, "type": "text"},
-                            {"video_url": {"url": video_data_url}, "type": "video_url"},
                             {"text": asr_text, "type": "text"},
-                            {"text": segment_prompt, "type": "text"}]
+                            {"text": segment_prompt, "type": "text"},
+                            {"video_url": {"url": video_data_url}, "type": "video_url"}]
                 }]
     resp_json = call_dashscope_api(api_key, provider, model_name, messages, thinking_budget=thinking_budget)
     content_string = resp_json['choices'][0]['message']['content']
     answer_match = re.search(r"<answer>(.*?)</answer>", content_string, re.S)
+    usage = resp_json.get('usage', {})
+    tokens, cost = calculate_cost_from_usage(usage)
+    finish_reason = resp_json['choices'][0]['finish_reason']
+    if finish_reason == "length":
+        print(f"[WARNING] 回复提前截断。{content_string}")
+        answer_json = None
+        return answer_json, tokens, cost
+    if not answer_match:
+        print(f"[WARNING] 未找到 <answer> 标签，响应内容不符合预期。{content_string}")
+        answer_json = None
+        return answer_json, tokens, cost
     answer_text = answer_match.group(1).strip()
     answer_json = json.loads(answer_text)
-    return answer_json
+    return answer_json, tokens, cost
 
 # ----------------------------
 # 目录遍历与 worker 调度逻辑
 # ----------------------------
 
-def process_single_rttm(rttm_path, api_key, provider, model_name, thinking_budget, resume):
+def process_single_rttm(rttm_path, lang, api_key, provider, model_name, thinking_budget, resume):
     meta = {"rttm": rttm_path, "status": "ok", "error": None, "tokens": 0, "cost": 0.0, "out_path": None}
     try:
         files = find_files_for_rttm(rttm_path)
@@ -282,14 +351,16 @@ def process_single_rttm(rttm_path, api_key, provider, model_name, thinking_budge
         
         # 1) audio 分析
         audio_data_url = read_file_as_data_url(files["wav"], "audio/wav")
-        answer_json, tokens, cost = analyze_audio_worker(audio_data_url, asr_text, segments,
+        answer_json, tokens, cost = analyze_audio_worker(lang, audio_data_url, asr_text, segments,
                                                 api_key, provider, model_name, thinking_budget)
         # 保存
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(answer_json, f, ensure_ascii=False, indent=2)
+        if answer_json:
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(answer_json, f, ensure_ascii=False, indent=2)
 
 
         meta["out_path"] = out_path
+        meta["answer"] = answer_json
         meta["tokens"] = tokens
         meta["cost"] = cost
         return meta
@@ -298,43 +369,43 @@ def process_single_rttm(rttm_path, api_key, provider, model_name, thinking_budge
         meta["error"] = f"{repr(e)}\n{traceback.format_exc()}"
         return meta
 
-def batch_process(root_dir: str, api_key: str, provider: str, model_name: str,
+def batch_process(root_dir: str, lang: str, api_key: str, provider: str, model_name: str,
                   workers: int, thinking_budget: int, resume: bool):
     rttm_list = find_all_rttm_files(root_dir)
     if not rttm_list:
         print(f"[WARNING] 未找到任何 rttm 文件: {root_dir}")
         return
 
-    print(f"[INFO] 找到 {len(rttm_list)} 个 rttm 文件，准备并发 workers={workers}")
+    print(f"[INFO] 找到 {len(rttm_list)} 个 rttm 文件，语言 {lang}，准备并发 workers={workers}")
 
     stats = {"total": len(rttm_list), "done": 0, "skipped": 0, "errors": 0, "tokens": 0, "cost": 0.0}
     results = []
 
-    with ProcessPoolExecutor(max_workers=workers) as exe:
+    with ThreadPoolExecutor(max_workers=workers) as exe:
         futs = {}
         for rttm_path in rttm_list:
-            fut = exe.submit(process_single_rttm, rttm_path, api_key, provider, model_name, thinking_budget, resume)
+            fut = exe.submit(process_single_rttm, rttm_path, lang, api_key, provider, model_name, thinking_budget, resume)
             futs[fut] = rttm_path
-
-        for fut in as_completed(futs):
-            rttm_path = futs[fut]
-            try:
+            
+        try:
+            for fut in as_completed(futs):
+                rttm_path = futs[fut]
                 meta = fut.result()
                 results.append(meta)
                 if meta["status"] == "ok":
                     stats["done"] += 1
                     stats["tokens"] += meta.get("tokens", 0)
                     stats["cost"] += float(meta.get("cost", 0.0))
-                    print(f"[DONE] {meta['out_path']} tokens={meta.get('tokens')} cost={meta.get('cost')} total_cost={stats['cost']}")
+                    print(f"[DONE] {meta['out_path']} tokens={meta.get('tokens')} cost={meta.get('cost')} total_cost={stats['cost']} answer={meta.get('answer')}")
                 elif meta["status"] == "skip":
                     stats["skipped"] += 1
                     print(f"[SKIP] {rttm_path} reason={meta.get('error')}")
                 else:
                     stats["errors"] += 1
                     print(f"[ERROR] {rttm_path} err={meta.get('error')}")
-            except Exception as e:
-                stats["errors"] += 1
-                print(f"[EXCEPTION] 在处理 {rttm_path} 时失败: {repr(e)}")
+        except Exception as e:
+            stats["errors"] += 1
+            print(f"[ERROR] {e}")
 
     print("===== 任务汇总 =====")
     print(f"Total: {stats['total']}, Done: {stats['done']}, Skipped: {stats['skipped']}, Errors: {stats['errors']}")
@@ -343,11 +414,12 @@ def batch_process(root_dir: str, api_key: str, provider: str, model_name: str,
 def main():
     parser = argparse.ArgumentParser(description="Multimodal emotion analysis with CoT (audio+video).")
     parser.add_argument("--root_dir", required=True, help="根目录")
+    parser.add_argument("--lang", required=True, help="语言类别")
     parser.add_argument("--api_key", required=True, help="DASHSCOPE API key")
     parser.add_argument("--provider", default="google", choices=["google", "azure", "yingmao"], help="provider")
-    parser.add_argument("--model", default="gemini-2.5-flash", help="模型名")
-    parser.add_argument("--workers", type=int, default=12, help="并发 worker 数")
-    parser.add_argument("--thinking_budget", type=int, default=2048, help="CoT tokens 预算")
+    parser.add_argument("--model", default="gemini-3-flash-preview", help="模型名")
+    parser.add_argument("--workers", type=int, default=15, help="并发 worker 数，过多容易触发限流访问被拒绝")
+    parser.add_argument("--thinking_budget", type=int, default=1024, help="CoT tokens 最大值")
     parser.add_argument("--resume", action="store_true", help="结果已存在则跳过，确保断点续跑，防止重复分析")
     args = parser.parse_args()
     
@@ -355,7 +427,7 @@ def main():
         print("[WARNING] root_dir 不存在或不是目录:", args.root_dir)
         sys.exit(2)
     
-    batch_process(args.root_dir, args.api_key, args.provider, args.model,
+    batch_process(args.root_dir, args.lang, args.api_key, args.provider, args.model,
                   workers=args.workers, thinking_budget=args.thinking_budget, resume=args.resume)
 
 if __name__ == "__main__":

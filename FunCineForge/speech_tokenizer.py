@@ -35,7 +35,6 @@ def single_job(wav_path: str):
     if sample_rate != 16000:
         audio = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)(audio)
     if audio.shape[0] != 1:
-        print(f"[WARNING] Audio {wav_path} is not a single channel, shape is {audio.shape}")
         audio = audio.mean(dim=0, keepdim=True)
     if audio.shape[1] / 16000 > 60:
         print(f"[ERROR] Do not support extract speech token for audio longer than 60s")
