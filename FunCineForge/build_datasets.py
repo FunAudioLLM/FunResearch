@@ -1,21 +1,38 @@
 #!/usr/bin/env python3
 import os
 import re
-import sys
 import json
 import argparse
 import pickle
 from opencc import OpenCC
 cc_t2s = OpenCC("t2s")
 from typing import List, Set, Tuple, Dict, Any
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 import random
 import numpy as np
 from collections import Counter
+import unicodedata
 from collections import defaultdict
 from pypinyin import lazy_pinyin, Style
 from transformers import AutoTokenizer
 import Levenshtein
+
+_DIGIT_MAP = {
+    "1": "一", "2": "二", "3": "三", "4": "四",
+    "5": "五", "6": "六", "7": "七", "8": "八", "9": "九"}
+_ID_MAP = {
+    "A": "1", "B": "2", "C": "3", "D": "4", "E": "5",
+    "speaker_A": "1", "speaker_B": "2", "speaker_C": "3", "speaker_D": "4", "speaker_E": "5",
+    "speaker_1": "1", "speaker_2": "2", "speaker_3": "3", "speaker_4": "4", "speaker_5": "5",
+    "S1": "1", "S2": "2", "S3": "3", "S4": "4", "S5": "5"}
+VALID_LABELS_ZH = {"中性", "喜悦", "信任", "害怕", "惊讶", "难过", "厌恶", "生气", "期待", "紧张", "不确定"}
+VALID_LABELS_EN = {"neutral", "happy", "trust", "fear", "surprise","sadness", "disgust", "anger", "anticipation", "tension", "uncertain"}
+VALID_AGE_ZH = {"儿童", "青年", "中年", "中老年", "老年", "不确定"}
+VALID_AGE_EN = {"child", "teenager", "adult", "middle-aged", "elderly", "uncertain"}
+VALID_GENDER_ZH = {"男", "女", "不确定"}
+VALID_GENDER_EN = {"male", "female", "uncertain"}
+SIM_THRESHOLDS = {"zh": 0.50, "en": 0.65}
 
 
 def find_all_files(rttm_path: str) -> dict:
@@ -115,69 +132,92 @@ def count_char_types(text: str) -> dict:
         'digits': digits,
         'others': others
     }
-    
-_DIGIT_MAP = {
-    "1": "一", "2": "二", "3": "三", "4": "四",
-    "5": "五", "6": "六", "7": "七", "8": "八", "9": "九"}
-_ID_MAP = {
-    "A": "1", "B": "2", "C": "3", "D": "4", "E": "5",
-    "speaker_A": "1", "speaker_B": "2", "speaker_C": "3", "speaker_D": "4", "speaker_E": "5",
-    "speaker_1": "1", "speaker_2": "2", "speaker_3": "3", "speaker_4": "4", "speaker_5": "5",
-    "S1": "1", "S2": "2", "S3": "3", "S4": "4", "S5": "5"}
 
-def try_fix_foreign(text: str) -> Tuple[str, bool]:
+
+def try_fix_foreign(text: str, lang: str) -> Tuple[str, bool]:
     changed = False
-    # 1) "Speaker|ID|Character|Actor|Role N" (N: 1-9)
-    def _speaker_repl(m):
-        return "说话人" + _DIGIT_MAP.get(m.group(1), m.group(1))
-    text, nsub = re.subn(r'(?i)(?:Speaker|ID|Character|Actor|Role)\s*([1-9])', _speaker_repl, text)
-    if nsub > 0:
-        changed = True
-    # 2) "S1/S2/S3"
-    text, nsub = re.subn(r'(?i)(?<![A-Za-z0-9])S([1-9])(?![A-Za-z0-9])', 
-            lambda m: "说话人" + _DIGIT_MAP.get(m.group(1), m.group(1)), text)
-    if nsub > 0:
-        changed = True
-    # 3) 单字母（A B C）
-    def _letter_repl(m):
-        ch = m.group(1).upper()
-        idx = ord(ch) - ord('A') + 1
-        if 1 <= idx <= 9:
-            return _DIGIT_MAP[str(idx)]
-        return m.group(0)
-    text, nsub = re.subn(r'(?<![A-Za-z0-9])([A-Za-z])(?![A-Za-z0-9])', _letter_repl, text)
-    if nsub > 0:
-        changed = True
-    # 4) 性别标注 "Female" / "Male"
-    text, nsub = re.subn(r'(?i)(?:female)', "女性", text)
-    if nsub > 0:
-        changed = True
-    text, nsub = re.subn(r'(?i)(?:male)', "男性", text)
-    if nsub > 0:
-        changed = True
-    # 5) "playful|playfully|subtle|subtly|abrupt" 及其前后空格
-    text, nsub = re.subn(r'\s*\b(?:playful|playfully|subtle|subtly|abrupt|initial|respectful|rhetorical|dismissive)\b(?:\s*的)?\s*', '', text, flags=re.IGNORECASE)
-    if nsub > 0:
-        changed = True
-    
-    time_pattern = r'\s*(?:\(|（)\s*\d+(?:\.\d+)?(?:\s*[-–—]\s*\d+(?:\.\d+)?)?\s*s\s*(?:\)|）)'
-    text, nsub = re.subn(time_pattern, '', text, flags=re.IGNORECASE)
-    if nsub > 0:
-        changed = True
-        
-    if _contains_foreign(text):
+    if lang == "zh":
+        # 1) "Speaker|ID|Character|Actor|Role N" (N: 1-9)
+        def _speaker_repl(m):
+            return "说话人" + _DIGIT_MAP.get(m.group(1), m.group(1))
+        text, nsub = re.subn(r'(?i)(?:Speaker|ID|Character|Actor|Role)\s*([1-9])', _speaker_repl, text)
+        if nsub > 0:
+            changed = True
+        # 2) "S1/S2/S3"
+        text, nsub = re.subn(r'(?i)(?<![A-Za-z0-9])S([1-9])(?![A-Za-z0-9])', 
+                lambda m: "说话人" + _DIGIT_MAP.get(m.group(1), m.group(1)), text)
+        if nsub > 0:
+            changed = True
+        # 3) 单字母（A B C）
+        def _letter_repl(m):
+            ch = m.group(1).upper()
+            idx = ord(ch) - ord('A') + 1
+            if 1 <= idx <= 9:
+                return _DIGIT_MAP[str(idx)]
+            return m.group(0)
+        text, nsub = re.subn(r'(?<![A-Za-z0-9])([A-Za-z])(?![A-Za-z0-9])', _letter_repl, text)
+        if nsub > 0:
+            changed = True
+        # 4) 性别标注 "Female" / "Male"
+        text, nsub = re.subn(r'(?i)(?:female)', "女性", text)
+        if nsub > 0:
+            changed = True
+        text, nsub = re.subn(r'(?i)(?:male)', "男性", text)
+        if nsub > 0:
+            changed = True
+        # 5) other "playful|playfully|subtle|subtly|abrupt" ...
+        text, nsub = re.subn(r'\s*\b(?:playful|playfully|subtle|subtly|abrupt|initial|respectful|rhetorical|dismissive)\b(?:\s*的)?\s*', '', text, flags=re.IGNORECASE)
+        if nsub > 0:
+            changed = True
+        # 6) 移除时间戳
+        time_pattern = r'\s*(?:\(|（)\s*\d+(?:\.\d+)?(?:\s*[-–—]\s*\d+(?:\.\d+)?)?\s*s\s*(?:\)|）)'
+        text, nsub = re.subn(time_pattern, '', text, flags=re.IGNORECASE)
+        if nsub > 0:
+            changed = True
+    elif lang == "en":
+        # 1) 常见非ASCII标点映射，补充了西语标点
+        PUNCT_MAPPING = {
+            '。': '.', '，': ',', '！': '!', '？': '?', '：': ':', '；': ';',
+            '（': '(', '）': ')', '「': '"', '」': '"', '『': '"', '』': '"',
+            '、': ',', '·': '·', '…': '...', '—': '-', '\u3000': ' ', '\xa0': ' ',
+            '¡': '!', '¿': '?', '«': '"', '»': '"', '„': '"', '‚': ',', '‘': "'", '’': "'"
+        }
+        for non_ascii, ascii_punct in PUNCT_MAPPING.items():
+            if non_ascii in text:
+                text = text.replace(non_ascii, ascii_punct)
+                changed = True
+                
+        # 2） 重音字母规范化，如 "Raúl" → "Raul", "José" → "Jose", "café" → "cafe"
+        normalized = unicodedata.normalize('NFKD', text)
+        without_accents = ''.join(
+            c for c in normalized 
+            if unicodedata.category(c) != 'Mn'  # 'Mn'=Nonspacing_Mark（重音符号）
+        )
+        ascii_text = ''.join(c if ord(c) < 128 else ' ' for c in without_accents)
+        if ascii_text != text:
+            text = ascii_text
+            changed = True
+            
+        # 3) 合并多余空格（避免"word   word"）
+        text, nsub= re.subn(r'\s+', ' ', text)
+        if nsub > 0:
+            changed = True
+    if _contains_foreign(text, lang):
         changed = False
     return text, changed
 
 
-def _contains_foreign(text: str) -> bool:
+def _contains_foreign(text: str, lang: str) -> bool:
     """
     当 ascii > 0 或 non_cjk_letters > 0 时视为含外语脚本。
     """
-    if not text:
-        return False
-    stats = count_char_types(text)    
-    return (stats['ascii'] > 0) or (stats['non_cjk_letters'] > 0)
+    if lang == "zh":
+        stats = count_char_types(text)    
+        return (stats['ascii'] > 0) or (stats['non_cjk_letters'] > 0)
+    elif lang == "en":
+        return any(ord(c) > 127 for c in text)
+    else:
+        raise ValueError(f"Unsupported language code: {lang}. Use 'zh' or 'en'.")
 
 def _contains_traditional(text: str) -> bool:
     """
@@ -221,7 +261,7 @@ def calculate_text_similarity(text1, text2):
     text1_clean = remove_punctuation(text1)
     text2_clean = remove_punctuation(text2)
     
-    # 计算编辑距离
+    # Levenshtein 距离
     distance = Levenshtein.distance(text1_clean, text2_clean)
     
     # 相似度比
@@ -293,13 +333,19 @@ def parse_rttm_dialogue(rttm_path: str, meta: List[Dict[str, Any]]) -> List[Dict
     return dialogues
 
 
-def parse_cot(cot_wav_path: str) -> Tuple[Set[str], bool]:
+def parse_cot(cot_wav_path: str, lang: str) -> Tuple[Set[str], bool, dict]:
     """
-    解析 cot_wav json文件。
+    解析 cot_wav json文件，缓解幻觉问题。
     """
     speakers: Set[str] = set()
-    with open(cot_wav_path, "r", encoding="utf-8") as f:
-        obj = json.load(f)
+    try:
+        with open(cot_wav_path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception as e:
+        print(f"[ERROR] cot_wav 文件读取失败: {cot_wav_path} {str(e)}")
+        os.remove(cot_wav_path)
+        return speakers, False, None
+        
     changed = False
     
     label = obj.get("label", "")
@@ -316,48 +362,60 @@ def parse_cot(cot_wav_path: str) -> Tuple[Set[str], bool]:
         return speakers, False, obj
     
     # 外语脚本检测和修正（ASCII 或 非CJK字母）
-    text_foreign = _contains_foreign(text)
-    clue_foreign = _contains_foreign(clue)
+    text_foreign = _contains_foreign(text, lang)
+    clue_foreign = _contains_foreign(clue, lang)
     if text_foreign:
-        new_text, changed_text = try_fix_foreign(text)
+        new_text, changed_text = try_fix_foreign(text, lang)
         if changed_text:
             obj["text"] = new_text
+            print(f"[INFO] {cot_wav_path} text 外文已修复: <{text}> <{new_text}>")
+            text = new_text
             changed = True
-            print(f"[INFO] {cot_wav_path} text 英文已修复: <{text}> <{new_text}>")
         else:
             print(f"[WARNING] {cot_wav_path} text 含外文且无法修复")
             os.remove(cot_wav_path)
             return speakers, False, obj
     if clue_foreign:
-        new_clue, changed_clue = try_fix_foreign(clue)
+        new_clue, changed_clue = try_fix_foreign(clue, lang)
         if changed_clue:
             obj["clue"] = new_clue
+            print(f"[INFO] {cot_wav_path} clue 外文已修复: <{clue}> <{new_clue}>")
+            clue = new_clue
             changed = True
-            print(f"[INFO] {cot_wav_path} clue 英文已修复: <{clue}> <{new_clue}>")
         else:
             print(f"[WARNING] {cot_wav_path} clue 含外文且无法修复")
             os.remove(cot_wav_path)
             return speakers, False, obj
     # 繁体检测和修正
-    new_text, mod1 = _contains_traditional(text)
-    new_clue, mod2 = _contains_traditional(clue)
-    if mod1:
-        print(f"[INFO] {cot_wav_path} text 繁体已修复: <{text}> <{new_text}>")
-        obj["text"] = new_text
-        changed = True
-    if mod2:
-        print(f"[INFO] {cot_wav_path} clue 繁体已修复: <{clue}> <{new_clue}>")
-        obj["clue"] = new_clue
-        changed = True
-    
-    if label not in ("中性", "不确定", "喜悦", "信任", "害怕", "惊讶", "难过", "厌恶", "生气", "期待", "紧张"):
+    if lang == "zh":
+        new_text, mod1 = _contains_traditional(text)
+        new_clue, mod2 = _contains_traditional(clue)
+        if mod1:
+            print(f"[INFO] {cot_wav_path} text 中文繁体已修复: <{text}> <{new_text}>")
+            obj["text"] = new_text
+            changed = True
+        if mod2:
+            print(f"[INFO] {cot_wav_path} clue 中文繁体已修复: <{clue}> <{new_clue}>")
+            obj["clue"] = new_clue
+            changed = True
+            
+    if lang == "zh" and label not in VALID_LABELS_ZH:
         print(f"[INFO] {cot_wav_path} label 异常 {label}, set to 不确定")
         obj['label'] = "不确定"
         changed = True
+    if lang == "en":
+        label_clean = label.strip().lower()
+        if label_clean not in VALID_LABELS_EN:
+            print(f"[INFO] {cot_wav_path} label 异常 {label}, set to uncertain")
+            obj['label'] = "uncertain"
+            changed = True
+        elif label != label_clean:
+            print(f"[INFO] {cot_wav_path} label 修复: <{label}> <{label_clean}>")
+            obj['label'] = label_clean
+            changed = True
                 
     if not (0.0 <= confidence <= 1.0):
         print(f"[WARNING] {cot_wav_path} confidence 异常 {confidence}")
-        os.remove(cot_wav_path)
         os.remove(cot_wav_path)
         return speakers, False, obj
     
@@ -377,35 +435,57 @@ def parse_cot(cot_wav_path: str) -> Tuple[Set[str], bool]:
                 spk['id'] = mapped
                 speakers.add(mapped)
                 changed = True
-                print(f"[INFO] {cot_wav_path} 说话人 id 已修正: {spk_id} -> {mapped}")
+                print(f"[INFO] {cot_wav_path} 说话人 id 已修复: <{spk_id}> <{mapped}>")
             else:
                 print(f"[WARNING] {cot_wav_path} 说话人 id 异常 {spk_id}")
                 os.remove(cot_wav_path)
                 return speakers, False, obj
         age = spk.get("age", "")
-        if age not in ("儿童", "青年", "中年", "中老年", "老年", "不确定"):
-            print(f"[INFO] {cot_wav_path} 说话人年龄异常 {age}, set to 不确定")
+        if lang == "zh" and age not in VALID_AGE_ZH:
+            print(f"[INFO] {cot_wav_path} 说话人年龄段异常 {age}, set to 不确定")
             spk['age'] = "不确定"
             changed = True
+        if lang == "en":
+            age_clean = age.strip().lower()
+            if age_clean not in VALID_AGE_EN:
+                print(f"[INFO] {cot_wav_path} 说话人年龄段异常 {age}, set to uncertain")
+                spk['age'] = "uncertain"
+                changed = True
+            elif age != age_clean:
+                print(f"[INFO] {cot_wav_path} 说话人年龄段修复: <{age}> <{age_clean}>")
+                spk['age'] = age_clean
+                changed = True
+                
         gender = spk.get("gender", "")
-        if gender not in ("男", "女", "不确定"):
+        if lang == "zh" and gender not in VALID_GENDER_ZH:
             print(f"[INFO] {cot_wav_path} 说话人性别异常 {gender}, set to 不确定")
             spk['gender'] = "不确定"
             changed = True
+        if lang == "en":
+            gender_clean = gender.strip().lower()
+            if gender_clean not in VALID_GENDER_EN:
+                print(f"[INFO] {cot_wav_path} 说话人性别异常 {gender}, set to uncertain")
+                spk['gender'] = "uncertain"
+                changed = True
+            elif gender != gender_clean:
+                print(f"[INFO] {cot_wav_path} 说话人性别修复: <{gender}> <{gender_clean}>")
+                spk['gender'] = gender_clean
+                changed = True
         timbre = spk.get("timbre", "")
         if timbre == "":
             print(f"[WARNING] {cot_wav_path} 说话人角色描述为空 {spk_id} {timbre}")
             os.remove(cot_wav_path)
             return speakers, False, obj
-        if _contains_foreign(timbre):
+        if _contains_foreign(timbre, lang):
             print(f"[WARNING] cot_wav timbre 含外文 {cot_wav_path} {spk_id} {timbre}")
             os.remove(cot_wav_path)
             return speakers, False, obj
-        new_timbre, mod3 = _contains_traditional(timbre)
-        if mod3:
-            print(f"[INFO] {cot_wav_path} timbre 繁体已修复: <{timbre}> <{new_timbre}>")
-            spk["timbre"] = new_timbre
-            changed = True
+        if lang == "zh":
+            new_timbre, mod3 = _contains_traditional(timbre)
+            if mod3:
+                print(f"[INFO] {cot_wav_path} timbre 繁体已修复: <{timbre}> <{new_timbre}>")
+                spk["timbre"] = new_timbre
+                changed = True
     obj['speakers'] = spks
     if changed:
         _atomic_writeback(obj, cot_wav_path)
@@ -413,14 +493,23 @@ def parse_cot(cot_wav_path: str) -> Tuple[Set[str], bool]:
 
 
 
-def _extract_emotion_label(emotion_content: str) -> str:
+def _extract_emotion_label(emotion_content):
     """
-    emotion_content 格式示例: "<|startofemo|>喜悦 0.92<|endofemo|>"
+    emotion_content 格式示例: "喜悦 0.92"
     """
-    m = re.search(r'<\|startofemo\|>(.*?)<\|endofemo\|>', emotion_content)
-    inner = m.group(1).strip() if m else emotion_content.strip()
-    parts = inner.split()
-    return parts[0]
+    match = re.search(r'<\|startofemo\|>\s*(.*?)\s*<\|endofemo\|>', emotion_content)
+    clean_content = match.group(1).strip() if match else emotion_content.strip()
+    parts = clean_content.split(maxsplit=1)
+    label = parts[0].strip()
+    return label
+
+def _split_timbre(timbre):
+    if not timbre or not isinstance(timbre, str):
+        return []
+    # 替换所有分隔符为空格
+    normalized = re.sub(r'[、，,；;\s]+', ' ', timbre.strip())
+    words = [w.strip() for w in normalized.split() if w.strip()]
+    return words
 
 def compute_and_save_film_stats(film_record: Dict[str, list], output_dir: str):
     stats = {}
@@ -483,8 +572,8 @@ def compute_and_save_film_stats(film_record: Dict[str, list], output_dir: str):
                     overall_gender[gender] += 1
                     unique_speakers += 1
                     overall_unique_speakers += 1
-                    words = [w.strip() for w in timbre.split("、")]
-                    for word in words:
+                    timbre_words = _split_timbre(timbre)
+                    for word in timbre_words:
                         timbre_counter[word] += 1
                         overall_timbre[word] += 1
             
@@ -566,7 +655,7 @@ def compute_and_save_film_stats(film_record: Dict[str, list], output_dir: str):
 
 
 
-def process_single_rttm(rttm_path, tokenizer):
+def process_single_rttm(rttm_path, lang, tokenizer):
     files = find_all_files(rttm_path)
     basename = files["basename"]
     film = files["film"]
@@ -578,8 +667,8 @@ def process_single_rttm(rttm_path, tokenizer):
             "basename": basename,
             "status": "skip",
             "reason": f"缺失文件: {', '.join(missing_files)}"
-        }  
-    cot_spk, can_use, cot_obj = parse_cot(files["cot_wav"])
+        }
+    cot_spk, can_use, cot_obj = parse_cot(files["cot_wav"], lang)
     if not can_use:
         return {
             "basename": basename,
@@ -590,8 +679,10 @@ def process_single_rttm(rttm_path, tokenizer):
     srt_text = parse_srt_text(files["srt"])
     cot_text = cot_obj.get("text")
     text_sim = calculate_text_similarity(cot_text, srt_text)
-    if text_sim < 0.5:
-        print(f"[WARNING] cot文本与srt文本相似度过低 {basename} 相似度: {text_sim:.2f}")
+    threshold = SIM_THRESHOLDS.get(lang)
+    
+    if text_sim < threshold:
+        print(f"[WARNING] {utt} cot文本与srt文本相似度过低: {text_sim:.2f} < {threshold}")
         return {
             "basename": basename,
             "status": "skip",
@@ -629,9 +720,9 @@ def process_single_rttm(rttm_path, tokenizer):
         faceI = video_obj['faceI']
         faceI_count = len(faceI)
         # 判断样本类型
-        if frameI_count == 0 and faceI_count >= 0 and speech_length>0 and faceI_count > frameI_count:
+        if frameI_count == 0 and faceI_count >= 0 and speech_length>0:
             result["sample_type"] = "旁白"
-        elif frameI_count > 0 and faceI_count > 0 and speech_length>0 and faceI_count > frameI_count:
+        elif frameI_count > 0 and faceI_count > 0 and faceI_count >= frameI_count and speech_length>0:
             if result["cot_spk_count"] == 1:
                 result["sample_type"] = "独白"
             elif result["cot_spk_count"] == 2:
@@ -656,7 +747,7 @@ def process_single_rttm(rttm_path, tokenizer):
             ],
             "utt": utt,
             "type": result["sample_type"],
-            "source": "zh",
+            "source": lang,
             "task": "VTTS",
             "text_length": len(tokenizer.encode(cot_obj.get("text"))),
             "clue_length": len(tokenizer.encode(cot_obj.get("clue"))),
@@ -668,15 +759,23 @@ def process_single_rttm(rttm_path, tokenizer):
     return result
 
 
-def batch_process(root_dir: str, output_dir: str, tokenizer_path: str, workers: int, save: bool):
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-    rttm_list = find_rttm_files(root_dir)
-    if not rttm_list:
-        print(f"[WARNING] 未找到任何 rttm 文件: {root_dir}")
+def batch_process(root_zh: str, root_en: str, output_dir: str, tokenizer_path: str, workers: int, save: bool):
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)        
+    rttm_entries = []  # (rttm_path, lang)
+    if root_zh and os.path.isdir(root_zh):
+        zh_files = find_rttm_files(root_zh)
+        print(f"[INFO] 从中文目录 {root_zh} 找到 {len(zh_files)} 个RTTM文件")
+        rttm_entries.extend([(f, "zh") for f in zh_files])
+    if root_en and os.path.isdir(root_en):
+        en_files = find_rttm_files(root_en)
+        print(f"[INFO] 从英文目录 {root_en} 找到 {len(en_files)} 个RTTM文件")
+        rttm_entries.extend([(f, "en") for f in en_files])
+    if not rttm_entries:
+        print(f"[ERROR] 未找到任何RTTM文件")
         return
-    print(f"[INFO] 找到 {len(rttm_list)} 个 rttm 文件，准备并发 workers={workers}")
+    print(f"[INFO] 启动 {workers} workers 处理...")
     
-    total_count = len(rttm_list)
+    total_count = len(rttm_entries)
     skip_count = 0
     not_sim = 0
     sucess_count = 0
@@ -690,10 +789,21 @@ def batch_process(root_dir: str, output_dir: str, tokenizer_path: str, workers: 
     budeng = 0
     other = 0
     film_record = defaultdict(list)
-    with ProcessPoolExecutor(max_workers=workers) as exe:
-        futures = {exe.submit(process_single_rttm, r, tokenizer): r for r in rttm_list}
+                    
+    with ThreadPoolExecutor(max_workers=workers) as exe:
+        func = partial(process_single_rttm, tokenizer=tokenizer)
+        futures = {
+            exe.submit(func, rttm_path, lang): (rttm_path, lang)
+            for (rttm_path, lang) in rttm_entries
+        }
         for i, fut in enumerate(as_completed(futures)):
-            result = fut.result()
+            try:
+                result = fut.result(timeout=120)  
+            except Exception as e:
+                print(f"[ERROR] {str(e)}")
+                skip_count += 1
+                continue
+            
             if result["status"] == "skip":
                 skip_count += 1
                 if "本相似度过低" in result["reason"]:
@@ -757,20 +867,25 @@ def batch_process(root_dir: str, output_dir: str, tokenizer_path: str, workers: 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="提取最优数据集")
-    parser.add_argument("--root_dir", required=True, help="根目录")
+    parser.add_argument("--root_zh", default=None, help="中文数据集根目录")
+    parser.add_argument("--root_en", default=None, help="英文数据集根目录")
     parser.add_argument("--out_dir", required=True, help="保存 train/test jsonl 的目录")
-    parser.add_argument("--workers", type=int, default=100, help="并发 worker 数")
+    parser.add_argument("--workers", type=int, default=120, help="并发 worker 数")
     parser.add_argument("--tokenizer_path", default="tokenizer/Qwen2-0.5B-CosyVoice-BlankEN", help="预测text token length 的tokenizer目录")
     parser.add_argument("--seed", type=int, default=100, help="随机种子")
     parser.add_argument("--save", action="store_true", help="是否划分测试集和训练集并保存")
     args = parser.parse_args()
     
-    if not os.path.isdir(args.root_dir):
-        print("[WARNING] root_dir 不存在或不是目录:", args.root_dir)
-        sys.exit(2)
-    if args.save:
-        print("[INFO] 切分训练集测试集并保存")
-    else:
-        print("[INFO] 仅清洗文件并统计分布")
+    zh_exists = args.root_zh is not None and os.path.isdir(args.root_zh)
+    en_exists = args.root_en is not None and os.path.isdir(args.root_en)
+    if not zh_exists and not en_exists:
+        print(f"[ERROR] 请在参数 root_zh 与 root_en 中提供正确的中英文数据路径: zh={args.root_zh}, en={args.root_en}")
+        exit(2)
+    if zh_exists:
+        print(f"[INFO] 中文数据集: {args.root_zh}")
+    if en_exists:
+        print(f"[INFO] 英文数据集: {args.root_en}")
+        
+    print("[INFO] 生成数据集并统计..." if args.save else "[INFO] 仅进行双向验证修正文件并统计...")
     random.seed(args.seed)
-    batch_process(args.root_dir, output_dir=args.out_dir, tokenizer_path = args.tokenizer_path, workers=args.workers, save=args.save)
+    batch_process(args.root_zh, args.root_en, output_dir=args.out_dir, tokenizer_path = args.tokenizer_path, workers=args.workers, save=args.save)

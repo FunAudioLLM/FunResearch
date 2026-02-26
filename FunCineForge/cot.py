@@ -3,7 +3,7 @@
 用音视频通用 caption 大模型做 audio / video CoT分析和矫正。
 我们依赖接口: requests url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     本工具推荐并采用 gemini-3-pro-preview model， 可自行更换其他多模态理解大模型如 Qwen 3.5， gemini 3 flash
-    python cot.py --root_dir datasets/clean/zh --lang zh --provider google --model gemini-3-pro-preview --api_key xxx --resume
+    python cot.py --root_dir datasets/clean/zh --provider google --model gemini-3-pro-preview --api_key xxx --resume
 可更换 url 依赖，你可自行参考 https://ai.google.dev/gemini-api/docs/structured-output ，并修改 call_dashscope_api 代码
 from google import genai
 client = genai.Client()
@@ -33,18 +33,25 @@ import gc
 # 构造 Prompt（音频 / 视频）
 # ------------------------------
 AUDIO_PROMPT_TEMPLATE_zh = """
-你是一个专注于中文音频分析和纠错的专家，任务是使用辅助信息分析给定的 wav 音频文件，辅助信息有 ASR 转录文本，和从RTTM中提取的带有说话人 id（1，2，3 等）的时间戳。
-注意 ASR 转录文本会存在词汇错误和标点断句错误的情况，说话人 id 可能少标或多标,请你根据语音中实际的说话人音色区分说话人 id，纠正后的 id 需要和 RTTM 中的说话人 id 匹配。
+你是一个专注于中文音频分析和纠错的专家，任务是使用辅助信息分析给定的 WAV 音频文件，辅助信息有 ASR 转录文本，和从RTTM中提取的带有说话人 id（1，2，3 等）的时间戳。
+注意 ASR 转录文本会存在词汇错误和标点断句错误的情况，说话人 id 可能存在少标或多标，请你根据语音中实际的说话人音色来区分说话人 id，纠正后的 id 需要和 RTTM 的说话人 id 匹配。
 任务：
-需要判断音频中有几个说话人，分析每个说话人的年龄段、性别和音色属性，
-准确识别语音内容，并认真参考提供的 ASR 转录文本，对ASR转录文本进行纠错，给出正确的文本和合理的标点。
-根据语音内容和RTTM辅助信息，理解音频的各个时间段是哪个说话人在说话，
-然后思考并总结音频的整体情感线索和每个说话人的语调情感，总结每个说话人的属性信息和情感线索并保存在 clue 中，线索用中文陈述，不描述背景音效，线索限制在90字以内。
-输出：
-label 为<中性、喜悦、信任、害怕、惊讶、难过、厌恶、生气、期待、紧张、不确定>中一种，confidence 为label的置信度，text 为纠正后的转录文本，
-id 匹配RTTM中说话人 1，2，3...，age 为<儿童，青年，中年，中老年，老年，不确定>中一种，gender 为<男，女，不确定>中一种，timbre 为两三个描述音色的词汇。
-必须严格按照下面的字典模板格式输出，无其他任何额外输出。具体内容仅供参考，根据提供的 ASR 文本，时间戳说话人和语音信息给出。
-<answer>{"label": "中性", "confidence": 0.8, "text": "哎呀，将军，将军，不可连累老夫啊！大丈夫生居天地之间，岂能郁郁久居人下！", "speakers": [{"id": "1", "age": "中年", "gender": "男", "timbre": "低沉、苍老"}, {"id": "2", "age": "青年", "gender": "男", "timbre": "高亢、有力、果断"}, ...], "clue": "两名角色对话，第一位中年男性角色情绪紧张，语气略带颤抖和哀求，表达对被牵连的恐惧。第二位角色语调变得激昂坚定，铿锵有力，充满对尊严和自由的强烈渴望。整体展现出从畏惧到反抗的情感转变。"}</answer>
+1、确定音频中说话人的数量。
+2、分析每个说话人的年龄段、性别和音色属性。
+3、准确识别语音内容，认真参考提供的 ASR 转录文本，对 ASR 转录文本进行纠错，给出纠正后的文本和合理的中文标点。
+4、根据语音内容和 RTTM 信息，理解音频的每个时间段内是哪个说话人在说话。
+5、分析并总结音频的整体情感线索，和每个说话人的属性、语气和情感，并保存在 clue 字段中，线索用中文陈述，不描述背景音效，线索字数不超过100字。
+输出要求：
+1、text 为矫正后的转录文本带有合理的中文标点。
+2、label 为 <中性、喜悦、信任、害怕、惊讶、难过、厌恶、生气、期待、紧张、不确定> 中一种，confidence 为 label 的置信度（0.0 到 1.0）。
+3、speakers 包含以下对象的列表：
+id 必须与原始 RTTM id 编号系统一致，但分配逻辑基于音频内容，正确的 id 序号要和 RTTM 的 id 编号一致；
+age 为 <儿童，青年，中年，中老年，老年，不确定> 中一种；
+gender 为<男，女，不确定>中一种；
+timbre 为两三个描述音色的形容词（例如：深沉、柔和、磁性、疑虑）。
+4、clue 是对每位说话人的属性、情感和语气的描述。
+你必须严格按照下面的JSON格式输出，具体内容请根据实际音频填充，不能输出任何其他内容。
+<answer>{"label": "紧张", "confidence": 0.7, "text": "哎呀，将军，将军，不可连累老夫啊！大丈夫生居天地之间，岂能郁郁久居人下！", "speakers": [{"id": "1", "age": "中年", "gender": "男", "timbre": "低沉、苍老"}, {"id": "2", "age": "青年", "gender": "男", "timbre": "高亢、有力、果断"}, ...], "clue": "两名角色对话，第一位中年男性角色情绪紧张，语气略带颤抖和哀求，表达对被牵连的恐惧。第二位角色语调变得激昂坚定，铿锵有力，充满对尊严和自由的强烈渴望。整体展现出从畏惧到反抗的情感转变。"}</answer>
 """
 
 AUDIO_PROMPT_TEMPLATE_en = """
@@ -67,7 +74,7 @@ gender: <male, female, uncertain>;
 timbre: 2-3 descriptive adjectives (e.g., deep, gentle, magnetic, doubtful).
 clue: A summary description of each speaker's attributes, emotions, and tone.
 You must strictly follow the dictionary template below to output the results. Only output the result in the style shown below, without any other additional output.
-<answer>{"label": "Surprise", "confidence": 0.8, "text": "Oh, that is absolutely wonderful news! I can't believe we actually won the championship!", "speakers": [{"id": "1", "age": "teenager", "gender": "male", "timbre": "bright, energetic"}, {"id": "2", "age": "middle-aged", "gender": "female", "timbre": "warm, resonant"}, ...], "clue": "A dialogue between two speakers. The first young male speaker expresses intense excitement and disbelief about a victory. The second middle-aged female speaker responds with a warm, supportive tone. The overall atmosphere is celebratory and uplifting."}</answer>
+<answer>{"label": "surprise", "confidence": 0.8, "text": "Oh, that is absolutely wonderful news! I can't believe we actually won the championship!", "speakers": [{"id": "1", "age": "teenager", "gender": "male", "timbre": "bright, energetic"}, {"id": "2", "age": "middle-aged", "gender": "female", "timbre": "warm, resonant"}, ...], "clue": "A dialogue between two speakers. The first young male speaker expresses intense excitement and disbelief about a victory. The second middle-aged female speaker responds with a warm, supportive tone. The overall atmosphere is celebratory and uplifting."}</answer>
 """
 
 VIDEO_PROMPT_TEMPLATE = """
@@ -203,7 +210,7 @@ def call_dashscope_api(api_key: str, provider: str, model_name: str, messages: L
     for attempt in range(max_retries):
         try:
             resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=timeout)
-            if resp.status_code in [429, 500, 502, 503, 504]:
+            if resp.status_code in [400, 429, 500, 502, 503, 504]:
                 retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
                 wait = max(retry_after, 0.5 * (2 ** attempt))  # 指数退避
                 time.sleep(wait)
@@ -219,7 +226,7 @@ def call_dashscope_api(api_key: str, provider: str, model_name: str, messages: L
                 continue
             raise Exception(f"Max retries ({max_retries}) exceeded for network error: {e}")
         except HTTPError as e:
-            if e.response.status_code in [429, 500, 502, 503, 504] and attempt < max_retries - 1:
+            if e.response.status_code in [400, 429, 500, 502, 503, 504] and attempt < max_retries - 1:
                 retry_after = int(e.response.headers.get("Retry-After", 0))
                 wait = max(retry_after, 0.5 * (2 ** attempt))
                 time.sleep(wait)
@@ -244,8 +251,7 @@ def format_segments_for_prompt(segments: List[Dict]) -> str:
 
     header = "下列为RTTM文件提炼信息。"
     return header + "\n" + "\n".join(lines)
-        
-
+    
 # ------------------------------
 # 模型调用函数：audio/video 分别调用
 # ------------------------------
@@ -357,7 +363,9 @@ def process_single_rttm(rttm_path, lang, api_key, provider, model_name, thinking
         if answer_json:
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(answer_json, f, ensure_ascii=False, indent=2)
-
+            # 二次验证json格式
+            with open(out_path, "r", encoding="utf-8") as check_f:
+                obj = json.load(check_f)  # 触发解码验证
 
         meta["out_path"] = out_path
         meta["answer"] = answer_json
@@ -367,6 +375,8 @@ def process_single_rttm(rttm_path, lang, api_key, provider, model_name, thinking
     except Exception as e:
         meta["status"] = "error"
         meta["error"] = f"{repr(e)}\n{traceback.format_exc()}"
+        if os.path.exists(out_path):
+            os.remove(out_path)
         return meta
 
 def batch_process(root_dir: str, lang: str, api_key: str, provider: str, model_name: str,
@@ -418,7 +428,7 @@ def main():
     parser.add_argument("--api_key", required=True, help="DASHSCOPE API key")
     parser.add_argument("--provider", default="google", choices=["google", "azure", "yingmao"], help="provider")
     parser.add_argument("--model", default="gemini-3-flash-preview", help="模型名")
-    parser.add_argument("--workers", type=int, default=15, help="并发 worker 数，过多容易触发限流访问被拒绝")
+    parser.add_argument("--workers", type=int, default=12, help="并发 worker 数，过多容易触发限流访问被拒绝")
     parser.add_argument("--thinking_budget", type=int, default=1024, help="CoT tokens 最大值")
     parser.add_argument("--resume", action="store_true", help="结果已存在则跳过，确保断点续跑，防止重复分析")
     args = parser.parse_args()
