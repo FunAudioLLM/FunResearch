@@ -101,6 +101,7 @@ python speech_tokenizer.py --root datasets/clean/zh
 ## Dubbing Model ⚙️
 At present, inference code is open sourced for user experience, and API calling interfaces and multi-speaker scenarios are under development.
 We have provided some test samples and a reference audio in the data folder.
+You need to modify the **test_data_jsonl** and **output_dir** parameters in the **infer.sh** script.
 ```shell
 cd exps
 bash infer.sh

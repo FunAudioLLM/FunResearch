@@ -97,6 +97,7 @@ python speech_tokenizer.py --root datasets/clean/zh
 <a name="Dubbing-Model"></a>
 ## 配音模型 ⚙️
 目前开源了推理代码以供体验，API 调用接口和多人场景开发中... 我们提供了一些测试样例和一个参考音频在 data 文件夹中。
+您需要修改 **infer.sh** 脚本中的 **test_data_jsonl** 和 **output_dir** 参数。
 ```shell
 cd exps
 bash infer.sh
