@@ -99,8 +99,12 @@ python speech_tokenizer.py --root datasets/clean/zh
 
 <a name="Dubbing-Model"></a>
 ## Dubbing Model ⚙️
-Please stay tuned.
-
+At present, inference code is open sourced for user experience, and API calling interfaces and multi-speaker scenarios are under development.
+We have provided some test samples and a reference audio in the data folder.
+```shell
+cd exps
+bash infer.sh
+```
 
 
 <a name="Recent-Updates"></a>
@@ -110,6 +114,7 @@ Please stay tuned.
 - 2026/01/25: Fix some environmental and operational issues.
 - 2026/02/09: Optimized the data pipeline and added support for English videos.
 - 2026/03/05: English demo samples and CineDub-EN dataset samples released. 🔥
+- 2026/03/13: Open source inference code and checkpoints. 🔥
 
 <a name="Publication"></a>
 ## Publication 📚
